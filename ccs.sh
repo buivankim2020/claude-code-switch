@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.0.8"
+readonly CCS_VERSION="1.0.9"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
