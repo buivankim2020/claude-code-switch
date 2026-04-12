@@ -1075,7 +1075,7 @@ main() {
         esac
     done
 
-    set -- "${args[@]}"
+    set -- "${args[@]+"${args[@]}"}"
 
     # Check dependencies
     if ! command -v jq &>/dev/null; then
