@@ -253,7 +253,7 @@ validate_conf() {
     if [[ -n "$section" ]]; then
         for key in "${REQUIRED_KEYS[@]}"; do
             if ! echo "${current_keys[*]}" | grep -qw "$key"; then
-                errors+=("[$section]: Thiếu $key")
+                errors+=("[$section]: Missing $key")
             fi
         done
     fi
@@ -465,7 +465,7 @@ cmd_switch() {
                 info "Please reload VSCode: Ctrl+Shift+P → Reload Window"
             fi
         else
-            info "Vui lòng reload VSCode: Ctrl+Shift+P → Reload Window"
+            info "Please reload VSCode: Ctrl+Shift+P → Reload Window"
         fi
     fi
 
@@ -477,7 +477,6 @@ cmd_list() {
     active="$(get_active_profile)"
 
     echo "$(bold "Available profiles:")"
-
     local profile
     for profile in $(list_profiles); do
         if [[ "$profile" == "$active" ]]; then
@@ -653,7 +652,7 @@ cmd_remove() {
 
     local remaining
     remaining=$(list_profiles | wc -l)
-    info "Còn lại ${remaining} profiles"
+    info "${remaining} profiles remaining"
 }
 
 cmd_test() {
@@ -669,7 +668,7 @@ cmd_test() {
         profiles=$(list_profiles)
 
         if [[ -z "$profiles" ]]; then
-            error "Không tìm thấy profile nào"
+            error "No profiles found"
             return 1
         fi
 
@@ -687,12 +686,12 @@ cmd_test() {
         wait
 
         echo
-        info "Kết quả: kiểm tra log output ở trên"
+        info "Results: check log output above"
         return 0
     else
         # Test specific profile
         if ! list_profiles | grep -qx "$target"; then
-            error "Profile \"$target\" không tồn tại"
+            error "Profile \"$target\" does not exist"
             return 1
         fi
 
@@ -754,7 +753,7 @@ test_single_profile() {
     else
         echo "  [$name]  $(red "✗ HTTP $http_code")"
         if [[ -n "$detailed" ]]; then
-            echo "    API key có thể đã hết hạn hoặc endpoint không đúng."
+            echo "    API key may have expired or endpoint is incorrect."
         fi
     fi
 }
@@ -764,7 +763,7 @@ cmd_backup() {
         return 1
     fi
     backup_settings
-    success "Backup hoàn tất"
+    success "Backup complete"
 }
 
 cmd_update() {
@@ -774,18 +773,18 @@ cmd_update() {
     latest=$(curl -sf --max-time 10 "${REPO_URL}/VERSION" 2>/dev/null || echo "")
 
     if [[ -z "$latest" ]]; then
-        error "Không thể kiểm tra phiên bản mới"
+        error "Cannot check for new version"
         return 1
     fi
 
     if [[ "$latest" == "$CCS_VERSION" ]]; then
-        success "Bạn đang dùng phiên bản mới nhất: $CCS_VERSION"
+        success "You are on the latest version: $CCS_VERSION"
         return 0
     fi
 
-    echo "Có phiên bản mới: $latest (hiện tại: $CCS_VERSION)"
+    echo "New version available: $latest (current: $CCS_VERSION)"
 
-    if ! confirm "Cập nhật ngay?"; then
+    if ! confirm "Update now?"; then
         return 0
     fi
 
@@ -796,11 +795,11 @@ cmd_update() {
     if curl -sf --max-time 30 -o "$tmpfile" "${REPO_URL}/ccs.sh"; then
         chmod +x "$tmpfile"
         mv "$tmpfile" "${CCS_DIR}/ccs.sh"
-        success "Đã cập nhật lên v${latest}"
-        info "Chạy lại ccs để sử dụng phiên bản mới"
+        success "Updated to v${latest}"
+        info "Run ccs again to use the new version"
     else
         rm -f "$tmpfile"
-        error "Không thể tải phiên bản mới"
+        error "Cannot download new version"
         return 1
     fi
 }
@@ -808,17 +807,17 @@ cmd_update() {
 cmd_uninstall() {
     echo "$(bold "=== CCS Uninstall ===")"
     echo
-    echo "Thao tác này sẽ:"
-    echo "  1. Xóa thư mục ~/.ccs/ (bao gồm config, backups)"
-    echo "  2. Xóa symlink ccs"
-    echo "  3. (Tùy chọn) Khôi phục settings.json"
+    echo "This will:"
+    echo "  1. Remove directory ~/.ccs/ (including config, backups)"
+    echo "  2. Remove ccs symlink"
+    echo "  3. (Optional) Restore settings.json"
     echo
 
-    if confirm "Khôi phục settings.json từ backup gần nhất?"; then
+    if confirm "Restore settings.json from latest backup?"; then
         cmd_restore || true
     fi
 
-    if ! confirm "Xác nhận gỡ cài đặt CCS"; then
+    if ! confirm "Confirm CCS uninstall"; then
         return 0
     fi
 
@@ -839,7 +838,7 @@ cmd_uninstall() {
         info "Removed ~/.ccs/"
     fi
 
-    success "CCS đã được gỡ cài đặt hoàn toàn."
+    success "CCS has been completely uninstalled."
 }
 
 cmd_version() {
@@ -868,22 +867,22 @@ cmd_help() {
     if [[ -n "$topic" ]]; then
         case "$topic" in
             edit)
-                echo "$(bold "CCS EDIT") - Chỉnh sửa provider config"
+                echo "$(bold "CCS EDIT") - Edit provider config"
                 echo
                 echo "USAGE:"
                 echo "  ccs edit"
                 echo
-                echo "Mở ~/.ccs/provider.conf trong text editor để thêm, sửa, xóa profiles."
-                echo "Sử dụng \$EDITOR nếu có, mặc định vi."
-                echo "Sau khi lưu, profiles mới sẽ có sẵn ngay."
+                echo "Open ~/.ccs/provider.conf in text editor to add, edit, or remove profiles."
+                echo "Uses \$EDITOR if set, defaults to vi."
+                echo "After saving, new profiles are available immediately."
                 ;;
             add)
-                echo "$(bold "CCS ADD") - Thêm profile mới"
+                echo "$(bold "CCS ADD") - Add new profile"
                 echo
                 echo "USAGE:"
                 echo "  ccs add <name>"
                 echo
-                echo "Thêm profile mới vào provider.conf (interactive)."
+                echo "Add a new profile to provider.conf (interactive)."
                 ;;
             test)
                 echo "$(bold "CCS TEST") - Test API key/endpoint"
@@ -891,11 +890,11 @@ cmd_help() {
                 echo "USAGE:"
                 echo "  ccs test [profile_name]"
                 echo
-                echo "Không chỉ định profile → test tất cả (parallel, timeout 5s)."
+                echo "No profile specified → test all (parallel, timeout 5s)."
                 echo "Override timeout: CCS_TEST_TIMEOUT=10 ccs test"
                 ;;
             *)
-                error "Không có help cho: $topic"
+                error "No help for: $topic"
                 ;;
         esac
         return
@@ -903,44 +902,44 @@ cmd_help() {
 
     cat << 'EOF'
 CCS - Claude Code Switch v1.0.0
-Tool chuyển đổi nhanh AI provider profile cho Claude Code
+Quick switch between AI provider profiles for Claude Code
 
 USAGE:
   ccs <command> [options]
 
 COMMANDS:
-  <profile>           Chuyển sang profile chỉ định
-                      Ví dụ: ccs opus, ccs kimi
+  <profile>           Switch to specified profile
+                      e.g.: ccs opus, ccs kimi
 
-  list                Liệt kê tất cả profiles có sẵn
-  current             Hiển thị profile đang active
-  edit                Mở provider.conf trong editor
-  add <name>          Thêm profile mới (interactive)
-  remove <name>       Xóa profile khỏi provider.conf
-  test [name]         Test API key/endpoint (mặc định: test tất cả)
-  backup              Backup settings.json hiện tại
-  restore             Khôi phục settings.json từ backup
-  update              Cập nhật CCS lên phiên bản mới nhất
-  uninstall           Gỡ cài đặt CCS
-  version             Hiển thị thông tin phiên bản
-  help [command]      Hiển thị hướng dẫn
+  list                List all available profiles
+  current             Show active profile
+  edit                Open provider.conf in editor
+  add <name>          Add new profile (interactive)
+  remove <name>       Remove profile from provider.conf
+  test [name]         Test API key/endpoint (default: test all)
+  backup              Backup current settings.json
+  restore             Restore settings.json from backup
+  update              Update CCS to latest version
+  uninstall           Uninstall CCS
+  version             Show version info
+  help [command]      Show help
 
 OPTIONS:
-  -h, --help          Hiển thị hướng dẫn này
-  -v, --version       Hiển thị phiên bản
-  -y, --yes           Bỏ qua tất cả confirm prompts
+  -h, --help          Show this help
+  -v, --version       Show version
+  -y, --yes           Skip all confirm prompts
 
 EXAMPLES:
-  ccs opus            Chuyển sang profile Anthropic Opus
-  ccs list            Xem danh sách profiles
-  ccs edit            Sửa provider.conf
-  ccs test            Test tất cả profiles
-  CCS_TEST_TIMEOUT=10 ccs test  # Test với timeout 10s
+  ccs opus            Switch to Anthropic Opus profile
+  ccs list            List profiles
+  ccs edit            Edit provider.conf
+  ccs test            Test all profiles
+  CCS_TEST_TIMEOUT=10 ccs test  # Test with 10s timeout
 
 FILES:
-  ~/.ccs/provider.conf    File config profiles (do bạn quản lý)
-  ~/.ccs/config.env       Cấu hình CCS
-  ~/.ccs/backups/         Backup settings.json
+  ~/.ccs/provider.conf    Profile config file (managed by you)
+  ~/.ccs/config.env       CCS configuration
+  ~/.ccs/backups/         settings.json backups
 
 EOF
 }
@@ -949,19 +948,19 @@ EOF
 # First Run Setup
 #==============================================================================
 first_run_setup() {
-    echo "Chưa tìm thấy ${PROVIDER_CONF}"
+    echo "Not found: ${PROVIDER_CONF}"
 
     if [[ ! -f "$PROVIDER_EXAMPLE" ]]; then
-        error "Không tìm thấy template ${PROVIDER_EXAMPLE}"
+        error "Template not found: ${PROVIDER_EXAMPLE}"
         return 1
     fi
 
-    if confirm "Tạo từ template?"; then
+    if confirm "Create from template?"; then
         mkdir -p "$CCS_DIR"
         cp "$PROVIDER_EXAMPLE" "$PROVIDER_CONF"
         chmod 600 "$PROVIDER_CONF"
         info "Copied provider.conf.example → ~/.ccs/provider.conf (chmod 600)"
-        info "Mở editor để bạn điền API keys..."
+        info "Opening editor for you to fill in API keys..."
         echo
 
         cmd_edit
@@ -995,7 +994,7 @@ main() {
                 shift
                 ;;
             -*)
-                error "Flag không hợp lệ: $1"
+                error "Invalid flag: $1"
                 cmd_help
                 exit 1
                 ;;
@@ -1010,8 +1009,8 @@ main() {
 
     # Check dependencies
     if ! command -v jq &>/dev/null; then
-        error "Thiếu dependency: jq"
-        echo "Cài đặt:"
+        error "Missing dependency: jq"
+        echo "Install:"
         echo "  Ubuntu/Debian: sudo apt install jq"
         echo "  macOS: brew install jq"
         exit 1
@@ -1078,9 +1077,9 @@ main() {
             if list_profiles | grep -qx "$cmd"; then
                 cmd_switch "$cmd"
             else
-                error "Lệnh không hợp lệ: $cmd"
+                error "Invalid command: $cmd"
                 echo "  Available profiles: $(list_profiles | tr '\n' ' ')"
-                echo "  Chạy 'ccs help' để xem hướng dẫn."
+                echo "  Run 'ccs help' for usage."
                 exit 1
             fi
             ;;
