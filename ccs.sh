@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.1.2"
+readonly CCS_VERSION="1.1.3"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -99,6 +99,7 @@ red() { if $_use_color; then echo -e "\033[31m$1\033[0m"; else echo "$1"; fi; }
 green() { if $_use_color; then echo -e "\033[32m$1\033[0m"; else echo "$1"; fi; }
 yellow() { if $_use_color; then echo -e "\033[33m$1\033[0m"; else echo "$1"; fi; }
 bold() { if $_use_color; then echo -e "\033[1m$1\033[0m"; else echo "$1"; fi; }
+cyan() { if $_use_color; then echo -e "\033[36m$1\033[0m"; else echo "$1"; fi; }
 
 error() { echo "$(red "✗") $1" >&2; }
 success() { echo "$(green "✓") $1"; }
@@ -494,7 +495,22 @@ cmd_current() {
     active="$(get_active_profile)"
 
     if [[ -n "$active" ]]; then
-        echo "Active profile: $(bold "$active")"
+        local config
+        config=$(read_profile "$active")
+
+        local url model
+        while IFS='=' read -r key value; do
+            case "$key" in
+                ANTHROPIC_BASE_URL) url="$value" ;;
+                ANTHROPIC_DEFAULT_SONNET_MODEL) model="$value" ;;
+            esac
+        done <<< "$config"
+
+        url="${url%/}"
+        local host="${url#*://}"
+        host="${host%%/*}"
+
+        echo "$(green "●") $(bold "$active")  $(cyan "$model")  $host"
     else
         warn "No profile is currently active"
     fi
