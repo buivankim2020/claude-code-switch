@@ -75,6 +75,28 @@ check_dependencies() {
     fi
 }
 
+# Ensure ~/.local/bin is in PATH via shell rc
+ensure_path() {
+    local local_bin="${HOME}/.local/bin"
+    case ":${PATH}:" in
+        *":${local_bin}:"*) return ;;  # already in PATH
+    esac
+
+    local shell_rc=""
+    if [[ "${SHELL##*/}" == "zsh" ]]; then
+        shell_rc="${HOME}/.zshrc"
+    else
+        shell_rc="${HOME}/.bashrc"
+    fi
+
+    if [[ -f "$shell_rc" ]] && ! grep -q 'export PATH=.*\.local/bin' "$shell_rc" 2>/dev/null; then
+        echo >> "$shell_rc"
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$shell_rc"
+        info "Added ~/.local/bin to PATH in ${shell_rc##*/}"
+        warn "Run 'source ~/${shell_rc##*/}' or open a new terminal"
+    fi
+}
+
 # Get install path for symlink
 get_install_path() {
     if [[ -w "/usr/local/bin" ]]; then
@@ -137,6 +159,11 @@ install_ccs() {
 
     success "CCS installed at: $install_path"
     info "Config directory: ${CCS_DIR}"
+
+    # Ensure ~/.local/bin is in PATH
+    if [[ "$install_path" == "${HOME}/.local/bin/ccs" ]]; then
+        ensure_path
+    fi
 
     # Setup shell completion
     setup_completion
