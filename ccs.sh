@@ -3,7 +3,7 @@
 # CCS - Claude Code Switch
 # Quick switch between multiple AI provider profiles for Claude Code
 #
-# Version: 1.0.4
+# Version: 1.0.6
 # License: MIT
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.0.4"
+readonly CCS_VERSION="1.0.6"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -454,18 +454,16 @@ cmd_switch() {
     # Save active profile
     set_active_profile "$profile"
 
-    # Ask to reload VSCode
-    if confirm "Reload VSCode to apply?"; then
-        # Try to reload VSCode
-        if command -v code &>/dev/null; then
-            # Check if running in VSCode terminal
-            if [[ -n "${VSCODE_PID:-}" ]] || [[ -n "${TERM_PROGRAM:-}" ]]; then
-                info "Please reload VSCode: Ctrl+Shift+P → Reload Window"
-            else
-                info "Please reload VSCode: Ctrl+Shift+P → Reload Window"
-            fi
+    # Ask user to manually reload editor
+    if confirm "Reload editor now to apply?"; then
+        if [[ -n "${CODER:-}" ]] || [[ -n "${CODER_WORKSPACE_NAME:-}" ]]; then
+            info "Coder/Web: press F1 or Ctrl+Shift+P → Reload Window"
+            info "If changes do not apply, use manual reload again."
+        elif [[ "${TERM_PROGRAM:-}" == "vscode" ]] || [[ -n "${VSCODE_PID:-}" ]]; then
+            info "VSCode: press Ctrl+Shift+P → Reload Window"
+            info "If changes do not apply, use manual reload."
         else
-            info "Please reload VSCode: Ctrl+Shift+P → Reload Window"
+            info "Reload your editor window manually to apply changes"
         fi
     fi
 
