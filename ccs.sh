@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.1.4"
+readonly CCS_VERSION="1.1.5"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -516,6 +516,68 @@ cmd_current() {
     fi
 }
 
+cmd_status() {
+    local active
+    active="$(get_active_profile)"
+    local settings_path
+    settings_path="$(get_settings_path)"
+    local platform
+    platform="$(detect_platform)"
+
+    echo "$(bold "CCS Status")  v${CCS_VERSION}"
+    echo
+
+    # Active profile
+    if [[ -n "$active" ]]; then
+        local config url model
+        config=$(read_profile "$active")
+        while IFS='=' read -r key value; do
+            case "$key" in
+                ANTHROPIC_BASE_URL) url="$value" ;;
+                ANTHROPIC_DEFAULT_SONNET_MODEL) model="$value" ;;
+            esac
+        done <<< "$config"
+        url="${url%/}"
+        local host="${url#*://}"
+        host="${host%%/*}"
+
+        echo "  $(bold "Profile:")     $(green "●") $(bold "$active")"
+        echo "  $(bold "Model:")       $(cyan "$model")"
+        echo "  $(bold "Endpoint:")    $host"
+    else
+        echo "  $(bold "Profile:")     $(yellow "none")"
+    fi
+
+    echo
+
+    # Profiles overview
+    local profiles count=0
+    profiles=$(list_profiles)
+    for p in $profiles; do
+        ((count++)) || true
+    done
+    echo "  $(bold "Profiles:")    $count available"
+    for p in $profiles; do
+        if [[ "$p" == "$active" ]]; then
+            echo "                 $(green "●") $p"
+        else
+            echo "                 ○ $p"
+        fi
+    done
+
+    echo
+
+    # Paths & platform
+    echo "  $(bold "Platform:")    $platform"
+    echo "  $(bold "Config:")      $PROVIDER_CONF"
+    echo "  $(bold "Settings:")    $settings_path"
+    if [[ -f "$settings_path" ]]; then
+        echo "                 $(green "✓") exists"
+    else
+        echo "                 $(red "✗") not found"
+    fi
+}
+
 cmd_reload() {
     local active
     active="$(get_active_profile)"
@@ -977,6 +1039,7 @@ COMMANDS:
 
   list                List all available profiles
   current | active    Show active profile
+  status              Show full status overview
   reload              Re-apply active profile after manual edit
   edit                Open provider.conf in editor
   add <name>          Add new profile (interactive)
@@ -1099,6 +1162,9 @@ main() {
             ;;
         current|active)
             cmd_current
+            ;;
+        status)
+            cmd_status
             ;;
         reload)
             cmd_reload
