@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.0.6"
+readonly CCS_VERSION="1.0.7"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -665,20 +665,28 @@ cmd_test() {
         fi
 
         local count=0
-        local passed=0
+        local tmpdir
+        tmpdir=$(mktemp -d)
 
-        # Test in parallel
+        # Test in parallel, capture output per profile
         for profile in $profiles; do
             (
-                test_single_profile "$profile" "$timeout"
+                test_single_profile "$profile" "$timeout" > "$tmpdir/$profile" 2>&1
             ) &
             ((count++))
         done
 
         wait
 
+        # Print results in order
+        for profile in $profiles; do
+            [[ -f "$tmpdir/$profile" ]] && cat "$tmpdir/$profile"
+        done
+
+        rm -rf "$tmpdir"
+
         echo
-        info "Results: check log output above"
+        info "Tested $count profiles"
         return 0
     else
         # Test specific profile
