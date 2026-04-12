@@ -136,12 +136,6 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-latest
 ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-latest
 ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-latest
 
-[deepseek]
-ANTHROPIC_AUTH_TOKEN=sk-your-deepseek-key
-ANTHROPIC_BASE_URL=https://api.deepseek.com/v1
-ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-chat
-ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-reasoner
-ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-chat
 ```
 
 ### Managed keys
