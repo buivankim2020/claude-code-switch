@@ -10,7 +10,7 @@
 set -e
 
 # Configuration
-readonly CCS_VERSION="1.0.2"
+readonly CCS_VERSION="1.0.3"
 readonly REPO_URL="https://raw.githubusercontent.com/buivankim2020/claude-code-switch/main"
 readonly CCS_DIR="${HOME}/.ccs"
 

@@ -3,7 +3,7 @@
 # CCS - Claude Code Switch
 # Quick switch between multiple AI provider profiles for Claude Code
 #
-# Version: 1.0.2
+# Version: 1.0.3
 # License: MIT
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.0.2"
+readonly CCS_VERSION="1.0.3"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -470,6 +470,9 @@ cmd_switch() {
     fi
 
     success "Switched to profile: $profile"
+    echo "  Haiku:  $haiku"
+    echo "  Opus:   $opus"
+    echo "  Sonnet: $sonnet"
 }
 
 cmd_list() {
