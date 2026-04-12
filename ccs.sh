@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.1.0"
+readonly CCS_VERSION="1.1.1"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -946,7 +946,7 @@ COMMANDS:
                       e.g.: ccs opus, ccs kimi
 
   list                List all available profiles
-  current             Show active profile
+  current | active    Show active profile
   edit                Open provider.conf in editor
   add <name>          Add new profile (interactive)
   remove <name>       Remove profile from provider.conf
@@ -1066,7 +1066,7 @@ main() {
         list)
             cmd_list
             ;;
-        current)
+        current|active)
             cmd_current
             ;;
         edit)
