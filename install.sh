@@ -168,6 +168,20 @@ install_ccs() {
     # Setup shell completion
     setup_completion
 
+    # Show reload hint if ~/.local/bin was not in PATH
+    if [[ "$install_path" == "${HOME}/.local/bin/ccs" ]]; then
+        case ":${PATH}:" in
+            *":${HOME}/.local/bin:"*) ;;
+            *)
+                echo
+                warn "Run this first to activate ccs:"
+                echo
+                echo "  source ~/.bashrc"
+                echo
+                ;;
+        esac
+    fi
+
     echo
     echo "$(bold "Next steps:")"
     echo "  1. Run 'ccs' to create provider.conf from template"
