@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.1.1"
+readonly CCS_VERSION="1.1.2"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -500,6 +500,20 @@ cmd_current() {
     fi
 }
 
+cmd_reload() {
+    local active
+    active="$(get_active_profile)"
+
+    if [[ -z "$active" ]]; then
+        warn "No active profile to reload"
+        info "Switch to a profile first: ccs <profile>"
+        return 1
+    fi
+
+    info "Reloading profile: $active"
+    cmd_switch "$active"
+}
+
 cmd_edit() {
     local editor="${EDITOR:-vi}"
 
@@ -947,6 +961,7 @@ COMMANDS:
 
   list                List all available profiles
   current | active    Show active profile
+  reload              Re-apply active profile after manual edit
   edit                Open provider.conf in editor
   add <name>          Add new profile (interactive)
   remove <name>       Remove profile from provider.conf
@@ -1068,6 +1083,9 @@ main() {
             ;;
         current|active)
             cmd_current
+            ;;
+        reload)
+            cmd_reload
             ;;
         edit)
             cmd_edit
