@@ -79,10 +79,8 @@ check_dependencies() {
 get_install_path() {
     if [[ -w "/usr/local/bin" ]]; then
         echo "/usr/local/bin/ccs"
-    elif [[ -d "${HOME}/.local/bin" ]]; then
-        mkdir -p "${HOME}/.local/bin"
-        echo "${HOME}/.local/bin/ccs"
     else
+        mkdir -p "${HOME}/.local/bin"
         echo "${HOME}/.local/bin/ccs"
     fi
 }
