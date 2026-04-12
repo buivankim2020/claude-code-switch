@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # CCS - Claude Code Switch
-# Tool chuyển đổi nhanh giữa nhiều AI provider profile cho Claude Code
+# Quick switch between multiple AI provider profiles for Claude Code
 #
 # Version: 1.0.0
 # License: MIT
@@ -199,7 +199,7 @@ validate_conf() {
     local -a current_keys=()
 
     if [[ ! -f "$PROVIDER_CONF" ]]; then
-        error "Không tìm thấy ${PROVIDER_CONF}"
+        error "Not found: ${PROVIDER_CONF}"
         return 1
     fi
 
@@ -212,14 +212,14 @@ validate_conf() {
             if [[ -n "$section" ]]; then
                 for key in "${REQUIRED_KEYS[@]}"; do
                     if ! echo "${current_keys[*]}" | grep -qw "$key"; then
-                        errors+=("[$section]: Thiếu $key")
+                        errors+=("[$section]: Missing $key")
                     fi
                 done
             fi
 
             section="${BASH_REMATCH[1]}"
             if echo "${sections[*]}" | grep -qw "$section"; then
-                errors+=("Section trùng tên: [$section]")
+                errors+=("Duplicate section: [$section]")
             fi
             sections+=("$section")
             current_keys=()
@@ -239,9 +239,9 @@ validate_conf() {
             if ! $valid; then
                 # Check similar keys
                 if [[ "$key" == "ANTHROPIC_BASE_URLS" ]]; then
-                    errors+=("[$section]: Key không hợp lệ: $key (bạn có ý là ANTHROPIC_BASE_URL?)")
+                    errors+=("[$section]: Invalid key: $key (did you mean ANTHROPIC_BASE_URL?)")
                 else
-                    errors+=("[$section]: Key không hợp lệ: $key")
+                    errors+=("[$section]: Invalid key: $key")
                 fi
             else
                 current_keys+=("$key")
@@ -260,11 +260,11 @@ validate_conf() {
 
     # Check if any sections exist
     if [[ ${#sections[@]} -eq 0 ]]; then
-        errors+=("Không tìm thấy profile nào")
+        errors+=("No profiles found")
     fi
 
     if [[ ${#errors[@]} -gt 0 ]]; then
-        error "Lỗi trong ${PROVIDER_CONF}:"
+        error "Errors in ${PROVIDER_CONF}:"
         for err in "${errors[@]}"; do
             echo "  - $err" >&2
         done
@@ -308,11 +308,11 @@ cmd_restore() {
     backups=$(ls -1 "${BACKUP_DIR}/"*.json 2>/dev/null | sort -r)
 
     if [[ -z "$backups" ]]; then
-        error "Không tìm thấy backup nào"
+        error "No backups found"
         return 1
     fi
 
-    echo "Các backup có sẵn:"
+    echo "Available backups:"
     local i=1
     local backup_array=()
     while IFS= read -r backup; do
@@ -323,9 +323,9 @@ cmd_restore() {
         ((i++))
     done <<< "$backups"
 
-    read -r -p "Chọn backup (số thứ tự): " choice
+    read -r -p "Select backup (number): " choice
     if [[ -z "${backup_array[$((choice-1))]:-}" ]]; then
-        error "Lựa chọn không hợp lệ"
+        error "Invalid selection"
         return 1
     fi
 
@@ -334,10 +334,10 @@ cmd_restore() {
     local settings_path
     settings_path="$(get_settings_path)"
 
-    if confirm "Khôi phục từ $(basename "$selected")?"; then
+    if confirm "Restore from $(basename "$selected")?"; then
         mkdir -p "$(dirname "$settings_path")"
         cp "$selected" "$settings_path"
-        success "Đã khôi phục settings.json"
+        success "Restored settings.json"
     fi
 }
 
@@ -349,10 +349,10 @@ ensure_settings_exists() {
     settings_path="$(get_settings_path)"
 
     if [[ ! -f "$settings_path" ]]; then
-        if confirm "File settings.json chưa tồn tại. Tạo mới tại: $settings_path?"; then
+        if confirm "settings.json not found. Create at: $settings_path?"; then
             mkdir -p "$(dirname "$settings_path")"
             echo '{}' > "$settings_path"
-            info "Tạo $settings_path"
+            info "Created $settings_path"
         else
             return 1
         fi
@@ -407,10 +407,10 @@ cmd_switch() {
     done
 
     if ! $found; then
-        error "Profile \"$profile\" không tồn tại"
+        error "Profile \"$profile\" does not exist"
         local available
         available=$(list_profiles | tr '\n' ', ' | sed 's/, $//')
-        [[ -n "$available" ]] && echo "  Profiles có sẵn: $available" >&2
+        [[ -n "$available" ]] && echo "  Available profiles: $available" >&2
         return 1
     fi
 
@@ -418,7 +418,7 @@ cmd_switch() {
     local config
     config=$(read_profile "$profile")
     if [[ -z "$config" ]]; then
-        error "Không thể đọc profile \"$profile\""
+        error "Cannot read profile \"$profile\""
         return 1
     fi
 
@@ -436,7 +436,7 @@ cmd_switch() {
 
     # Validate all required keys present
     if [[ -z "${token:-}" || -z "${url:-}" || -z "${haiku:-}" || -z "${opus:-}" || -z "${sonnet:-}" ]]; then
-        error "Profile \"$profile\" thiếu thông tin bắt buộc"
+        error "Profile \"$profile\" is missing required fields"
         return 1
     fi
 
@@ -455,14 +455,14 @@ cmd_switch() {
     set_active_profile "$profile"
 
     # Ask to reload VSCode
-    if confirm "Reload VSCode để apply?"; then
+    if confirm "Reload VSCode to apply?"; then
         # Try to reload VSCode
         if command -v code &>/dev/null; then
             # Check if running in VSCode terminal
             if [[ -n "${VSCODE_PID:-}" ]] || [[ -n "${TERM_PROGRAM:-}" ]]; then
-                info "Vui lòng reload VSCode: Ctrl+Shift+P → Reload Window"
+                info "Please reload VSCode: Ctrl+Shift+P → Reload Window"
             else
-                info "Vui lòng reload VSCode: Ctrl+Shift+P → Reload Window"
+                info "Please reload VSCode: Ctrl+Shift+P → Reload Window"
             fi
         else
             info "Vui lòng reload VSCode: Ctrl+Shift+P → Reload Window"
@@ -476,7 +476,8 @@ cmd_list() {
     local active
     active="$(get_active_profile)"
 
-    echo "$(bold "Profiles có sẵn:")"
+    echo "$(bold "Available profiles:")"
+
     local profile
     for profile in $(list_profiles); do
         if [[ "$profile" == "$active" ]]; then
@@ -492,9 +493,9 @@ cmd_current() {
     active="$(get_active_profile)"
 
     if [[ -n "$active" ]]; then
-        echo "Profile đang active: $(bold "$active")"
+        echo "Active profile: $(bold "$active")"
     else
-        warn "Chưa có profile nào được active"
+        warn "No profile is currently active"
     fi
 }
 
@@ -503,16 +504,16 @@ cmd_edit() {
 
     if [[ ! -f "$PROVIDER_CONF" ]]; then
         if [[ -f "$PROVIDER_EXAMPLE" ]]; then
-            if confirm "Chưa có provider.conf. Tạo từ template?"; then
+            if confirm "No provider.conf found. Create from template?"; then
                 mkdir -p "$CCS_DIR"
                 cp "$PROVIDER_EXAMPLE" "$PROVIDER_CONF"
                 chmod 600 "$PROVIDER_CONF"
-                info "Tạo ${PROVIDER_CONF} (chmod 600)"
+                info "Created ${PROVIDER_CONF} (chmod 600)"
             else
                 return 1
             fi
         else
-            error "Không tìm thấy template ${PROVIDER_EXAMPLE}"
+            error "Template not found: ${PROVIDER_EXAMPLE}"
             return 1
         fi
     fi
@@ -531,12 +532,12 @@ cmd_edit() {
     if [[ "$original_checksum" != "$new_checksum" ]]; then
         info "Validating provider.conf..."
         if validate_conf; then
-            success "provider.conf hợp lệ"
+            success "provider.conf is valid"
             local count
             count=$(list_profiles | wc -l)
-            info "Tìm thấy $count profiles"
+            info "Found $count profiles"
         else
-            if confirm "Mở lại editor để sửa?"; then
+            if confirm "Reopen editor to fix?"; then
                 cmd_edit
             fi
         fi
@@ -547,21 +548,21 @@ cmd_add() {
     local name="${1:-}"
 
     if [[ -z "$name" ]]; then
-        read -r -p "Tên profile: " name
+        read -r -p "Profile name: " name
     fi
 
     if [[ -z "$name" ]]; then
-        error "Tên profile không được để trống"
+        error "Profile name cannot be empty"
         return 1
     fi
 
     # Check if exists
     if list_profiles | grep -qx "$name"; then
-        error "Profile \"$name\" đã tồn tại"
+        error "Profile \"$name\" already exists"
         return 1
     fi
 
-    echo "=== Thêm profile: $name ==="
+    echo "=== Add profile: $name ==="
     echo
 
     local token url haiku opus sonnet
@@ -573,7 +574,7 @@ cmd_add() {
 
     # Validate
     if [[ -z "$token" || -z "$url" || -z "$haiku" || -z "$opus" || -z "$sonnet" ]]; then
-        error "Tất cả các trường đều bắt buộc"
+        error "All fields are required"
         return 1
     fi
 
@@ -592,8 +593,8 @@ ANTHROPIC_DEFAULT_SONNET_MODEL=${sonnet}
 EOF
 
     chmod 600 "$PROVIDER_CONF"
-    success "Đã thêm profile [${name}] vào provider.conf"
-    info "Chạy \"ccs ${name}\" để sử dụng."
+    success "Added profile [${name}] to provider.conf"
+    info "Run \"ccs ${name}\" to use it."
 }
 
 cmd_remove() {
@@ -606,7 +607,7 @@ cmd_remove() {
 
     # Check if exists
     if ! list_profiles | grep -qx "$name"; then
-        error "Profile \"$name\" không tồn tại"
+        error "Profile \"$name\" does not exist"
         return 1
     fi
 
@@ -614,12 +615,12 @@ cmd_remove() {
     local active
     active="$(get_active_profile)"
     if [[ "$name" == "$active" ]]; then
-        error "Không thể xóa profile đang active: [$name]"
-        info "Chạy \"ccs <profile_khác>\" trước, sau đó thử lại."
+        error "Cannot delete active profile: [$name]"
+        info "Run \"ccs <other_profile>\" first, then try again."
         return 1
     fi
 
-    if ! confirm "Bạn có chắc muốn xóa profile [$name]?"; then
+    if ! confirm "Are you sure you want to delete profile [$name]?"; then
         return 0
     fi
 
@@ -648,7 +649,7 @@ cmd_remove() {
     mv "$tmpfile" "$PROVIDER_CONF"
     chmod 600 "$PROVIDER_CONF"
 
-    success "Đã xóa profile [${name}] khỏi provider.conf"
+    success "Removed profile [${name}] from provider.conf"
 
     local remaining
     remaining=$(list_profiles | wc -l)
@@ -1078,7 +1079,7 @@ main() {
                 cmd_switch "$cmd"
             else
                 error "Lệnh không hợp lệ: $cmd"
-                echo "  Profiles có sẵn: $(list_profiles | tr '\n' ' ')"
+                echo "  Available profiles: $(list_profiles | tr '\n' ' ')"
                 echo "  Chạy 'ccs help' để xem hướng dẫn."
                 exit 1
             fi

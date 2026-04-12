@@ -15,25 +15,25 @@ _ccs() {
     fi
 
     local commands=(
-        'list:Liệt kê tất cả profiles'
-        'current:Hiển thị profile đang active'
-        'edit:Mở provider.conf trong editor'
-        'add:Thêm profile mới'
-        'remove:Xóa profile'
+        'list:List all profiles'
+        'current:Show active profile'
+        'edit:Open provider.conf in editor'
+        'add:Add new profile'
+        'remove:Remove profile'
         'test:Test API key/endpoint'
         'backup:Backup settings.json'
-        'restore:Khôi phục từ backup'
-        'update:Cập nhật CCS'
-        'uninstall:Gỡ cài đặt CCS'
-        'version:Hiển thị phiên bản'
-        'help:Hiển thị hướng dẫn'
+        'restore:Restore from backup'
+        'update:Update CCS'
+        'uninstall:Uninstall CCS'
+        'version:Show version'
+        'help:Show help'
     )
 
     _arguments -C \
-        '(-h --help)'{-h,--help}'[Hiển thị hướng dẫn]' \
-        '(-v --version)'{-v,--version}'[Hiển thị phiên bản]' \
-        '(-y --yes)'{-y,--yes}'[Bỏ qua confirm prompts]' \
-        '--no-color[Tắt màu output]' \
+        '(-h --help)'{-h,--help}'[Show help]' \
+        '(-v --version)'{-v,--version}'[Show version]' \
+        '(-y --yes)'{-y,--yes}'[Skip confirm prompts]' \
+        '--no-color[Disable colored output]' \
         '1: :->command' \
         '*: :->args' \
         && return 0

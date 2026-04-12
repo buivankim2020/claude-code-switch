@@ -53,9 +53,9 @@ check_dependencies() {
     fi
 
     if [[ ${#missing[@]} -gt 0 ]]; then
-        error "Thiếu dependencies: ${missing[*]}"
+        error "Missing dependencies: ${missing[*]}"
         echo
-        echo "Cài đặt:"
+        echo "Install:"
 
         local platform
         platform=$(detect_platform)
@@ -68,7 +68,7 @@ check_dependencies() {
                 echo "  brew install ${missing[*]}"
                 ;;
             *)
-                echo "  Vui lòng cài đặt: ${missing[*]}"
+                echo "  Please install: ${missing[*]}"
                 ;;
         esac
         exit 1
@@ -95,7 +95,7 @@ download_file() {
     local url="${REPO_URL}/${filename}"
 
     if ! curl -fsSL --max-time 60 "$url" -o "$dest" 2>/dev/null; then
-        error "Không thể tải ${filename}"
+        error "Cannot download ${filename}"
         return 1
     fi
 
@@ -114,7 +114,7 @@ install_ccs() {
     mkdir -p "$CCS_DIR"
     mkdir -p "${CCS_DIR}/backups"
 
-    info "Đang tải CCS..."
+    info "Downloading CCS..."
 
     # Download files
     download_file "ccs.sh" "${CCS_DIR}/ccs.sh"
@@ -137,21 +137,21 @@ install_ccs() {
 
     ln -sf "${CCS_DIR}/ccs.sh" "$install_path"
 
-    success "CCS đã được cài đặt tại: $install_path"
-    info "Thư mục cấu hình: ${CCS_DIR}"
+    success "CCS installed at: $install_path"
+    info "Config directory: ${CCS_DIR}"
 
     # Setup shell completion
     setup_completion
 
     echo
-    echo "$(bold "Tiếp theo:")"
-    echo "  1. Chạy 'ccs' để tạo provider.conf từ template"
-    echo "  2. Điền API keys vào provider.conf"
-    echo "  3. Chạy 'ccs <profile>' để switch"
+    echo "$(bold "Next steps:")"
+    echo "  1. Run 'ccs' to create provider.conf from template"
+    echo "  2. Fill in API keys in provider.conf"
+    echo "  3. Run 'ccs <profile>' to switch"
     echo
     echo "$(bold "Help:")"
-    echo "  ccs help           # Xem hướng dẫn"
-    echo "  ccs list           # Liệt kê profiles"
+    echo "  ccs help           # Show help"
+    echo "  ccs list           # List profiles"
 }
 
 # Setup shell completion
@@ -167,7 +167,7 @@ setup_completion() {
                 echo >> "$shell_rc"
                 echo "# CCS Tab Completion" >> "$shell_rc"
                 echo "[[ -f ~/.ccs/ccs-completion.zsh ]] && source ~/.ccs/ccs-completion.zsh" >> "$shell_rc"
-                info "Đã thêm tab completion vào ~/.zshrc"
+                info "Added tab completion to ~/.zshrc"
             fi
         fi
     elif [[ -n "${BASH_VERSION:-}" ]] || [[ "${SHELL##*/}" == "bash" ]]; then
@@ -178,7 +178,7 @@ setup_completion() {
                 echo >> "$shell_rc"
                 echo "# CCS Tab Completion" >> "$shell_rc"
                 echo "[[ -f ~/.ccs/ccs-completion.bash ]] && source ~/.ccs/ccs-completion.bash" >> "$shell_rc"
-                info "Đã thêm tab completion vào ~/.bashrc"
+                info "Added tab completion to ~/.bashrc"
             fi
         fi
     fi
@@ -201,13 +201,13 @@ uninstall_ccs() {
         fi
     done
 
-    echo "Thao tác này sẽ:"
-    echo "  1. Xóa thư mục ${CCS_DIR}/"
-    [[ -n "$actual_symlink" ]] && echo "  2. Xóa symlink ${actual_symlink}"
+    echo "This will:"
+    echo "  1. Remove directory ${CCS_DIR}/"
+    [[ -n "$actual_symlink" ]] && echo "  2. Remove symlink ${actual_symlink}"
     echo
 
-    read -r -p "Xác nhận gỡ cài đặt CCS? (y/n): " confirm
-    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Đã hủy."; exit 0; }
+    read -r -p "Confirm CCS uninstall? (y/n): " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 0; }
 
     # Remove symlink
     if [[ -n "$actual_symlink" ]]; then
@@ -229,7 +229,7 @@ uninstall_ccs() {
         fi
     done
 
-    success "CCS đã được gỡ cài đặt hoàn toàn."
+    success "CCS has been completely uninstalled."
 }
 
 # Main
