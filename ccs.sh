@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.0.7"
+readonly CCS_VERSION="1.0.8"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -671,12 +671,13 @@ cmd_test() {
         # Test in parallel, capture output per profile
         for profile in $profiles; do
             (
+                set +e
                 test_single_profile "$profile" "$timeout" > "$tmpdir/$profile" 2>&1
             ) &
-            ((count++))
+            ((count++)) || true
         done
 
-        wait
+        wait || true
 
         # Print results in order
         for profile in $profiles; do
@@ -736,22 +737,31 @@ test_single_profile() {
     fi
 
     # Perform test request
-    local http_code
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    local curl_out
+    curl_out=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" \
         --max-time "$timeout" \
         --connect-timeout 3 \
         -H "x-api-key: $token" \
         -H "content-type: application/json" \
         -H "anthropic-version: 2023-06-01" \
         -d '{"model":"'"$model"'","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
-        "$url/v1/messages" 2>/dev/null || echo "000")
+        "$url/v1/messages" 2>/dev/null || echo "000 0")
+
+    local http_code="${curl_out%% *}"
+    local time_total="${curl_out##* }"
+    local time_ms
+    time_ms=$(printf "%.0f" "$(echo "$time_total * 1000" | bc 2>/dev/null || echo "0")")
+
+    # Extract host from URL
+    local host="${url#*://}"
+    host="${host%%/*}"
 
     if [[ "$http_code" == "000" ]]; then
-        echo "  [$name]  $(red "✗ TIMEOUT") (>${timeout}s)"
+        echo "  [$name]  $(red "✗ TIMEOUT") (>${timeout}s)  ${host}"
     elif [[ "$http_code" == "200" ]]; then
-        echo "  [$name]  $(green "✓ OK")"
+        echo "  [$name]  $(green "✓ OK")  ${time_ms}ms  ${host}"
     else
-        echo "  [$name]  $(red "✗ HTTP $http_code")"
+        echo "  [$name]  $(red "✗ HTTP $http_code")  ${time_ms}ms  ${host}"
         if [[ -n "$detailed" ]]; then
             echo "    API key may have expired or endpoint is incorrect."
         fi
