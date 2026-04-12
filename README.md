@@ -48,11 +48,12 @@ bash install.sh
 ## Quick Start
 
 ```bash
-# 1. Run ccs for the first time — it creates provider.conf from template
+# 1. Run ccs for the first time — it will guide you to add your first profile
 ccs
 
-# 2. Edit provider.conf and fill in your API keys
-ccs edit
+# 2. Add more profiles
+ccs add kimi
+ccs add deepseek
 
 # 3. Switch to a profile
 ccs opus

@@ -3,7 +3,7 @@
 # CCS - Claude Code Switch
 # Quick switch between multiple AI provider profiles for Claude Code
 #
-# Version: 1.0.1
+# Version: 1.0.2
 # License: MIT
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.0.1"
+readonly CCS_VERSION="1.0.2"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -502,19 +502,9 @@ cmd_edit() {
     local editor="${EDITOR:-vi}"
 
     if [[ ! -f "$PROVIDER_CONF" ]]; then
-        if [[ -f "$PROVIDER_EXAMPLE" ]]; then
-            if confirm "No provider.conf found. Create from template?"; then
-                mkdir -p "$CCS_DIR"
-                cp "$PROVIDER_EXAMPLE" "$PROVIDER_CONF"
-                chmod 600 "$PROVIDER_CONF"
-                info "Created ${PROVIDER_CONF} (chmod 600)"
-            else
-                return 1
-            fi
-        else
-            error "Template not found: ${PROVIDER_EXAMPLE}"
-            return 1
-        fi
+        warn "No provider.conf found."
+        info "Run \"ccs add <name>\" to create your first profile."
+        return 1
     fi
 
     # Save original checksum
@@ -948,24 +938,29 @@ EOF
 # First Run Setup
 #==============================================================================
 first_run_setup() {
-    echo "Not found: ${PROVIDER_CONF}"
+    echo "$(bold "=== CCS First Run Setup ===")"
+    echo
+    echo "No provider.conf found. Let's add your first profile!"
+    echo
 
-    if [[ ! -f "$PROVIDER_EXAMPLE" ]]; then
-        error "Template not found: ${PROVIDER_EXAMPLE}"
-        return 1
-    fi
+    # Create empty provider.conf
+    mkdir -p "$CCS_DIR"
+    touch "$PROVIDER_CONF"
+    chmod 600 "$PROVIDER_CONF"
 
-    if confirm "Create from template?"; then
-        mkdir -p "$CCS_DIR"
-        cp "$PROVIDER_EXAMPLE" "$PROVIDER_CONF"
-        chmod 600 "$PROVIDER_CONF"
-        info "Copied provider.conf.example → ~/.ccs/provider.conf (chmod 600)"
-        info "Opening editor for you to fill in API keys..."
+    # Interactive add
+    cmd_add
+
+    local profile_count
+    profile_count=$(list_profiles | wc -l)
+
+    if [[ "$profile_count" -gt 0 ]]; then
         echo
-
-        cmd_edit
-    else
-        return 1
+        success "Setup complete! Found ${profile_count} profile(s)."
+        info "Run \"ccs list\" to see profiles."
+        info "Run \"ccs <profile>\" to switch."
+        echo
+        info "To add more profiles: ccs add <name>"
     fi
 }
 
