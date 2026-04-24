@@ -2,13 +2,13 @@
 
 > Quick switch between multiple AI provider profiles for Claude Code.
 
-CCS is a lightweight CLI tool (bash script) that lets you instantly switch Claude Code's `settings.json` between different AI providers — Anthropic, Kimi, DeepSeek, Google Gemini, and more. Fully local, no server required.
+CCS is a lightweight CLI tool (bash script) that lets you instantly switch Claude Code's `settings.json` between different AI providers — Anthropic, Kimi, DeepSeek, Google Gemini, Microsoft Azure Foundry, and more. Fully local, no server required.
 
 ## Features
 
 - **Instant profile switching** — one command to swap provider, API key, and models
-- **Multi-provider support** — Anthropic, Kimi, DeepSeek, Gemini, or any OpenAI-compatible API
-- **Safe** — auto-backup `settings.json` before every switch (keeps last 10)
+- **Multi-provider support** — Anthropic, Kimi, DeepSeek, Gemini, Azure Foundry, or any OpenAI-compatible API
+- **Safe** — auto-backup `settings.json` before every switch (keeps last 10); only CCS-managed keys are touched, everything else (theme, hooks, permissions, custom env vars) is left untouched
 - **Cross-platform** — Linux, macOS, WSL
 - **Tab completion** — Bash and Zsh
 - **Self-update** — `ccs update` to pull the latest version
@@ -83,6 +83,8 @@ ccs gemini      # Switch to Google Gemini
 |----------------------|--------------------------------------------------|
 | `ccs list`           | List all available profiles                      |
 | `ccs current`        | Show the currently active profile                |
+| `ccs status`         | Full status overview (profile + paths + platform) |
+| `ccs reload`         | Re-apply the active profile after editing its config |
 | `ccs edit`           | Open `provider.conf` in your editor (`$EDITOR`)  |
 | `ccs add <name>`     | Add a new profile interactively                  |
 | `ccs remove <name>`  | Remove a profile from `provider.conf`            |
@@ -120,14 +122,16 @@ ccs gemini      # Switch to Google Gemini
 
 ### Profile format (`provider.conf`)
 
-Uses INI format. Each `[section]` is a profile name:
+Uses INI format. Each `[section]` is a profile name. The optional `PROVIDER_TYPE` key selects the shape of the profile (`anthropic` by default, or `foundry` for Microsoft Azure Foundry).
+
+#### Type: `anthropic` (default — Anthropic API, Kimi, DeepSeek, Gemini, OpenAI-compatible proxies)
 
 ```ini
 [opus]
 ANTHROPIC_AUTH_TOKEN=sk-ant-your-key-here
 ANTHROPIC_BASE_URL=https://api.anthropic.com
 ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5-20251001
-ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6-20250414
+ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-7
 ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6-20250514
 
 [kimi]
@@ -136,31 +140,104 @@ ANTHROPIC_BASE_URL=https://api.kimi.ai/v1
 ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-latest
 ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-latest
 ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-latest
-
 ```
+
+#### Type: `foundry` (Microsoft Azure Foundry)
+
+```ini
+[foundry]
+PROVIDER_TYPE=foundry
+ANTHROPIC_FOUNDRY_RESOURCE=your-foundry-resource
+ANTHROPIC_FOUNDRY_API_KEY=your-foundry-project-api-key
+ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6
+ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6
+```
+
+`ANTHROPIC_FOUNDRY_RESOURCE` is the Azure resource name; CCS derives the endpoint
+`https://<resource>.services.ai.azure.com/anthropic`. If you need a custom host, use
+`ANTHROPIC_FOUNDRY_BASE_URL=<full-url>` instead (the two are mutually exclusive).
+Model names must match the deployment names you created in the Foundry portal.
+
+See [Azure Foundry setup](#azure-foundry-setup) for a walkthrough.
 
 ### Managed keys
 
-CCS only modifies these 5 keys in `settings.json` — everything else is left untouched:
+CCS only modifies the provider-specific keys in `settings.json`'s `env` block —
+**everything else** (theme, model, permissions, hooks, statusLine, custom env vars
+like `HTTP_PROXY`, etc.) is left untouched. Switching between `anthropic` and
+`foundry` profiles automatically clears the keys of the other type so there is no
+stale configuration.
 
-| Key | Description |
-|-----|-------------|
-| `ANTHROPIC_AUTH_TOKEN` | API key for the provider |
-| `ANTHROPIC_BASE_URL` | API endpoint URL |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | Model ID for the haiku tier |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Model ID for the opus tier |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Model ID for the sonnet tier |
+| Type       | Keys written                                                                                                     | Keys cleared on switch                    |
+|------------|------------------------------------------------------------------------------------------------------------------|-------------------------------------------|
+| anthropic  | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_DEFAULT_{HAIKU,OPUS,SONNET}_MODEL`                       | `CLAUDE_CODE_USE_FOUNDRY`, `ANTHROPIC_FOUNDRY_*` |
+| foundry    | `CLAUDE_CODE_USE_FOUNDRY=1`, `ANTHROPIC_FOUNDRY_{RESOURCE\|BASE_URL}`, `ANTHROPIC_FOUNDRY_API_KEY`, 3 model keys | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` |
 
 ## How It Works
 
 When you run `ccs <profile>`:
 
-1. Reads the profile from `provider.conf`
+1. Reads the profile from `provider.conf` and determines its `PROVIDER_TYPE`
 2. Backs up current `settings.json` to `~/.ccs/backups/`
 3. Cleans up old backups (keeps the 10 most recent)
-4. Updates **only** the 5 managed keys in `settings.json` using `jq`
+4. Updates **only** the managed keys in `settings.json` using `jq`, clearing any stale keys left over from a different provider type
 5. Saves the active profile to `config.env`
 6. Prompts to reload VSCode to apply changes
+
+## Azure Foundry setup
+
+Microsoft Azure Foundry hosts Claude models on Azure infrastructure with enterprise
+security and private networking. Claude Code supports Foundry natively via a
+different set of environment variables than the direct Anthropic API.
+
+### Prerequisites
+
+1. Azure subscription with access to [Microsoft Foundry](https://ai.azure.com/).
+2. A Foundry project in a [supported region](https://aka.ms/supported_anthropic_regions) (East US 2 or Sweden Central at the time of writing).
+3. Deployments for the Claude models you want Claude Code to use — typically `claude-sonnet-4-6`, `claude-haiku-4-5`, and `claude-opus-4-6`. The deployment names are what you put in `ANTHROPIC_DEFAULT_*_MODEL`.
+4. A **Project API key** — copy it from the Foundry portal home page (**Project API key** field), or from a deployment's **Details** tab.
+
+### Add a Foundry profile
+
+Interactive:
+
+```bash
+ccs add foundry
+# Select type: 2 (foundry)
+# ANTHROPIC_FOUNDRY_RESOURCE: your-foundry-resource
+# ANTHROPIC_FOUNDRY_API_KEY:  <paste project key>
+# (model names default to claude-*-4-*)
+```
+
+Or paste into `ccs edit`:
+
+```ini
+[foundry]
+PROVIDER_TYPE=foundry
+ANTHROPIC_FOUNDRY_RESOURCE=my-foundry
+ANTHROPIC_FOUNDRY_API_KEY=xxxxxxxxxxxxxxxx
+ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6
+ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6
+```
+
+Then:
+
+```bash
+ccs foundry
+ccs test foundry    # verify endpoint + API key
+```
+
+CCS writes `CLAUDE_CODE_USE_FOUNDRY=1` and the Foundry env vars into
+`settings.json`. Reload your VSCode window to pick them up. Once active,
+Claude Code's `/status` should report `API provider: Microsoft Foundry`.
+
+### Notes
+
+- CCS currently only supports **API key** authentication in Foundry profiles. If you prefer Microsoft Entra ID (`az login`), remove `ANTHROPIC_FOUNDRY_API_KEY` from the profile *after* switching and rely on Claude Code's built-in Azure CLI fallback. Note that `ccs test` skips the probe when no key is present.
+- The Foundry anthropic-compat endpoint path `/anthropic` is appended automatically when you use `ANTHROPIC_FOUNDRY_RESOURCE`. Use `ANTHROPIC_FOUNDRY_BASE_URL` for the full URL only if you have a non-standard host.
+- Official references: [Microsoft Foundry docs](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/configure-claude-code) · [Claude Code docs](https://code.claude.com/docs/en/microsoft-foundry).
 
 ## Testing Profiles
 
@@ -178,13 +255,11 @@ CCS_TEST_TIMEOUT=10 ccs test
 Example output:
 
 ```
-Testing all profiles (timeout: 5s)...
-  [opus]      ✓ OK (0.8s)
-  [kimi]      ✗ 401 Unauthorized
-  [deepseek]  ✓ OK (1.2s)
-  [gemini]    ✗ TIMEOUT (>5s)
-
-Result: 2/4 profiles working.
+Testing all profiles (timeout: 5s, parallel)...
+  [opus]      ✓ OK   820ms   api.anthropic.com                   (anthropic)
+  [kimi]      ✗ HTTP 401   450ms   api.kimi.ai
+  [deepseek]  ✓ OK   1200ms  api.deepseek.com                     (openai)
+  [foundry]   ✓ OK   950ms   my-foundry.services.ai.azure.com    (foundry)
 ```
 
 ## Platform Support

@@ -5,12 +5,28 @@
 #   cp provider.conf.example ~/.ccs/provider.conf
 #
 # Format: INI-style sections. Each [section] is a profile name.
-# Required keys per profile:
-#   ANTHROPIC_AUTH_TOKEN       - Your API key
-#   ANTHROPIC_BASE_URL         - API endpoint URL
-#   ANTHROPIC_DEFAULT_HAIKU_MODEL   - Model ID for haiku tier
-#   ANTHROPIC_DEFAULT_OPUS_MODEL    - Model ID for opus tier
-#   ANTHROPIC_DEFAULT_SONNET_MODEL  - Model ID for sonnet tier
+#
+# PROVIDER_TYPE (optional, default=anthropic) selects the shape of the profile.
+#
+# --- Type: anthropic (default) ---
+# Required keys:
+#   ANTHROPIC_AUTH_TOKEN
+#   ANTHROPIC_BASE_URL
+#   ANTHROPIC_DEFAULT_HAIKU_MODEL
+#   ANTHROPIC_DEFAULT_OPUS_MODEL
+#   ANTHROPIC_DEFAULT_SONNET_MODEL
+#
+# --- Type: foundry (Microsoft Azure Foundry) ---
+# Required keys:
+#   PROVIDER_TYPE=foundry
+#   ANTHROPIC_FOUNDRY_RESOURCE        Azure resource name, URL is derived as
+#                                     https://<resource>.services.ai.azure.com/anthropic
+#     -- OR --
+#   ANTHROPIC_FOUNDRY_BASE_URL        Full base URL if you need a custom host
+#   ANTHROPIC_FOUNDRY_API_KEY         Foundry project API key
+#   ANTHROPIC_DEFAULT_HAIKU_MODEL     Deployment name, e.g. claude-haiku-4-5
+#   ANTHROPIC_DEFAULT_OPUS_MODEL      Deployment name, e.g. claude-opus-4-6
+#   ANTHROPIC_DEFAULT_SONNET_MODEL    Deployment name, e.g. claude-sonnet-4-6
 
 [opus]
 ANTHROPIC_AUTH_TOKEN=sk-ant-your-anthropic-key-here
@@ -25,3 +41,11 @@ ANTHROPIC_BASE_URL=https://api.kimi.ai/v1
 ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-latest
 ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-latest
 ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-latest
+
+[foundry]
+PROVIDER_TYPE=foundry
+ANTHROPIC_FOUNDRY_RESOURCE=your-foundry-resource
+ANTHROPIC_FOUNDRY_API_KEY=your-foundry-api-key
+ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6
+ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6

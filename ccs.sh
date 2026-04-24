@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.1.5"
+readonly CCS_VERSION="1.2.0"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -20,14 +20,65 @@ readonly BACKUP_DIR="${CCS_DIR}/backups"
 readonly UPDATE_CHECK_FILE="${CCS_DIR}/.update_check"
 readonly REPO_URL="https://raw.githubusercontent.com/buivankim2020/claude-code-switch/main"
 
-# Required keys for each profile
-readonly REQUIRED_KEYS=(
-    "ANTHROPIC_AUTH_TOKEN"
-    "ANTHROPIC_BASE_URL"
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL"
-    "ANTHROPIC_DEFAULT_OPUS_MODEL"
-    "ANTHROPIC_DEFAULT_SONNET_MODEL"
-)
+# Known provider types
+readonly KNOWN_TYPES="anthropic foundry"
+
+# All valid keys across every provider type (used for typo detection)
+readonly ALL_VALID_KEYS="PROVIDER_TYPE \
+ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL \
+ANTHROPIC_FOUNDRY_RESOURCE ANTHROPIC_FOUNDRY_BASE_URL ANTHROPIC_FOUNDRY_API_KEY \
+ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL"
+
+# Return required keys for a given provider type.
+# For the 'foundry' type, ANTHROPIC_FOUNDRY_RESOURCE and ANTHROPIC_FOUNDRY_BASE_URL
+# are OR-required (at least one must be present) — handled separately in validate_conf.
+get_required_keys() {
+    local type="${1:-anthropic}"
+    case "$type" in
+        foundry)
+            echo "ANTHROPIC_FOUNDRY_API_KEY \
+ANTHROPIC_DEFAULT_HAIKU_MODEL \
+ANTHROPIC_DEFAULT_OPUS_MODEL \
+ANTHROPIC_DEFAULT_SONNET_MODEL"
+            ;;
+        anthropic|*)
+            echo "ANTHROPIC_AUTH_TOKEN \
+ANTHROPIC_BASE_URL \
+ANTHROPIC_DEFAULT_HAIKU_MODEL \
+ANTHROPIC_DEFAULT_OPUS_MODEL \
+ANTHROPIC_DEFAULT_SONNET_MODEL"
+            ;;
+    esac
+}
+
+# Return the PROVIDER_TYPE declared in a profile; echoes "anthropic" if absent.
+get_profile_type() {
+    local profile="$1"
+    local type=""
+    local config
+    config=$(read_profile "$profile") || return 1
+    while IFS='=' read -r key value; do
+        if [[ "$key" == "PROVIDER_TYPE" ]]; then
+            type="$value"
+            break
+        fi
+    done <<< "$config"
+    echo "${type:-anthropic}"
+}
+
+# Derive the Foundry anthropic-compat base URL from either RESOURCE or BASE_URL.
+# Echoes the resolved URL (no trailing slash, no /anthropic suffix stripping here).
+resolve_foundry_url() {
+    local resource="$1"
+    local base_url="$2"
+    if [[ -n "$base_url" ]]; then
+        echo "${base_url%/}"
+    elif [[ -n "$resource" ]]; then
+        echo "https://${resource}.services.ai.azure.com/anthropic"
+    else
+        echo ""
+    fi
+}
 
 # Available commands
 readonly COMMANDS="list current edit add remove test backup restore update uninstall version help"
@@ -192,12 +243,46 @@ read_profile() {
     done < "$PROVIDER_CONF"
 }
 
+# Validate a single completed section: required-keys + Foundry OR-rule.
+# Appends error strings (via printf) to stdout; caller reads them into the errors array.
+_validate_section() {
+    local section="$1"
+    local type="$2"
+    local keys="$3"   # space-separated list of keys seen
+
+    local required
+    required=$(get_required_keys "$type")
+    local key
+    for key in $required; do
+        if ! echo " $keys " | grep -qw "$key"; then
+            printf '[%s]: Missing %s\n' "$section" "$key"
+        fi
+    done
+
+    if [[ "$type" == "foundry" ]]; then
+        if ! echo " $keys " | grep -qw "ANTHROPIC_FOUNDRY_RESOURCE" && \
+           ! echo " $keys " | grep -qw "ANTHROPIC_FOUNDRY_BASE_URL"; then
+            printf '[%s]: Missing ANTHROPIC_FOUNDRY_RESOURCE or ANTHROPIC_FOUNDRY_BASE_URL\n' "$section"
+        fi
+    fi
+
+    # Check type is known
+    local known=false
+    local t
+    for t in $KNOWN_TYPES; do
+        [[ "$type" == "$t" ]] && known=true
+    done
+    if ! $known; then
+        printf '[%s]: Unknown PROVIDER_TYPE: %s (known: %s)\n' "$section" "$type" "$KNOWN_TYPES"
+    fi
+}
+
 validate_conf() {
     local errors=()
-    local in_section=false
     local section=""
+    local section_type="anthropic"
     local -a sections=()
-    local -a current_keys=()
+    local current_keys=""
 
     if [[ ! -f "$PROVIDER_CONF" ]]; then
         error "Not found: ${PROVIDER_CONF}"
@@ -211,11 +296,9 @@ validate_conf() {
         if [[ "$line" =~ ^\[([^\]]+)\] ]]; then
             # Validate previous section if exists
             if [[ -n "$section" ]]; then
-                for key in "${REQUIRED_KEYS[@]}"; do
-                    if ! echo "${current_keys[*]}" | grep -qw "$key"; then
-                        errors+=("[$section]: Missing $key")
-                    fi
-                done
+                while IFS= read -r err; do
+                    [[ -n "$err" ]] && errors+=("$err")
+                done < <(_validate_section "$section" "$section_type" "$current_keys")
             fi
 
             section="${BASH_REMATCH[1]}"
@@ -223,40 +306,49 @@ validate_conf() {
                 errors+=("Duplicate section: [$section]")
             fi
             sections+=("$section")
-            current_keys=()
+            current_keys=""
+            section_type="anthropic"
             continue
         fi
 
-        if [[ -n "$section" && "$line" =~ ^([A-Z_]+)= ]]; then
+        if [[ -n "$section" && "$line" =~ ^([A-Z_]+)=(.*)$ ]]; then
             key="${BASH_REMATCH[1]}"
-            # Check for typos
+            val="${BASH_REMATCH[2]}"
+            val="${val%%#*}"
+            val="${val%% }"
+            val="${val## }"
+
+            # PROVIDER_TYPE sets the section's type
+            if [[ "$key" == "PROVIDER_TYPE" ]]; then
+                section_type="$val"
+            fi
+
+            # Check for typos against ALL_VALID_KEYS
             local valid=false
-            for req in "${REQUIRED_KEYS[@]}"; do
-                if [[ "$key" == "$req" ]]; then
+            local vk
+            for vk in $ALL_VALID_KEYS; do
+                if [[ "$key" == "$vk" ]]; then
                     valid=true
                     break
                 fi
             done
             if ! $valid; then
-                # Check similar keys
                 if [[ "$key" == "ANTHROPIC_BASE_URLS" ]]; then
                     errors+=("[$section]: Invalid key: $key (did you mean ANTHROPIC_BASE_URL?)")
                 else
                     errors+=("[$section]: Invalid key: $key")
                 fi
             else
-                current_keys+=("$key")
+                current_keys="$current_keys $key"
             fi
         fi
     done < "$PROVIDER_CONF"
 
     # Validate last section
     if [[ -n "$section" ]]; then
-        for key in "${REQUIRED_KEYS[@]}"; do
-            if ! echo "${current_keys[*]}" | grep -qw "$key"; then
-                errors+=("[$section]: Missing $key")
-            fi
-        done
+        while IFS= read -r err; do
+            [[ -n "$err" ]] && errors+=("$err")
+        done < <(_validate_section "$section" "$section_type" "$current_keys")
     fi
 
     # Check if any sections exist
@@ -360,7 +452,7 @@ ensure_settings_exists() {
     fi
 }
 
-update_settings_json() {
+update_settings_anthropic() {
     local token="$1"
     local url="$2"
     local haiku="$3"
@@ -369,11 +461,10 @@ update_settings_json() {
     local settings_path
     settings_path="$(get_settings_path)"
 
-    # Create temp file
     local tmpfile
     tmpfile=$(mktemp)
 
-    # Use jq to update only the 5 env keys
+    # Write Anthropic keys; clear any Foundry-specific keys left from a previous switch.
     jq --arg token "$token" \
        --arg url "$url" \
        --arg haiku "$haiku" \
@@ -384,7 +475,57 @@ update_settings_json() {
         .env.ANTHROPIC_BASE_URL = $url |
         .env.ANTHROPIC_DEFAULT_HAIKU_MODEL = $haiku |
         .env.ANTHROPIC_DEFAULT_OPUS_MODEL = $opus |
-        .env.ANTHROPIC_DEFAULT_SONNET_MODEL = $sonnet' \
+        .env.ANTHROPIC_DEFAULT_SONNET_MODEL = $sonnet |
+        del(.env.CLAUDE_CODE_USE_FOUNDRY) |
+        del(.env.ANTHROPIC_FOUNDRY_RESOURCE) |
+        del(.env.ANTHROPIC_FOUNDRY_BASE_URL) |
+        del(.env.ANTHROPIC_FOUNDRY_API_KEY)' \
+       "$settings_path" > "$tmpfile"
+
+    mv "$tmpfile" "$settings_path"
+    info "Updated settings.json"
+}
+
+update_settings_foundry() {
+    local resource="$1"
+    local base_url="$2"
+    local api_key="$3"
+    local haiku="$4"
+    local opus="$5"
+    local sonnet="$6"
+    local settings_path
+    settings_path="$(get_settings_path)"
+
+    local tmpfile
+    tmpfile=$(mktemp)
+
+    # Build a jq program that conditionally sets RESOURCE or BASE_URL (never both);
+    # always clears the other one and the Anthropic-direct keys.
+    local set_resource='del(.env.ANTHROPIC_FOUNDRY_RESOURCE)'
+    local set_base_url='del(.env.ANTHROPIC_FOUNDRY_BASE_URL)'
+    if [[ -n "$resource" ]]; then
+        set_resource='.env.ANTHROPIC_FOUNDRY_RESOURCE = $resource'
+    fi
+    if [[ -n "$base_url" ]]; then
+        set_base_url='.env.ANTHROPIC_FOUNDRY_BASE_URL = $base_url'
+    fi
+
+    jq --arg resource "$resource" \
+       --arg base_url "$base_url" \
+       --arg api_key "$api_key" \
+       --arg haiku "$haiku" \
+       --arg opus "$opus" \
+       --arg sonnet "$sonnet" \
+       ".env = (.env // {}) |
+        .env.CLAUDE_CODE_USE_FOUNDRY = \"1\" |
+        ${set_resource} |
+        ${set_base_url} |
+        .env.ANTHROPIC_FOUNDRY_API_KEY = \$api_key |
+        .env.ANTHROPIC_DEFAULT_HAIKU_MODEL = \$haiku |
+        .env.ANTHROPIC_DEFAULT_OPUS_MODEL = \$opus |
+        .env.ANTHROPIC_DEFAULT_SONNET_MODEL = \$sonnet |
+        del(.env.ANTHROPIC_AUTH_TOKEN) |
+        del(.env.ANTHROPIC_BASE_URL)" \
        "$settings_path" > "$tmpfile"
 
     mv "$tmpfile" "$settings_path"
@@ -423,23 +564,23 @@ cmd_switch() {
         return 1
     fi
 
-    # Parse values
+    # Parse values for both provider types in one pass
+    local type="anthropic"
     local token url haiku opus sonnet
+    local foundry_resource foundry_base_url foundry_api_key
     while IFS='=' read -r key value; do
         case "$key" in
+            PROVIDER_TYPE) type="$value" ;;
             ANTHROPIC_AUTH_TOKEN) token="$value" ;;
             ANTHROPIC_BASE_URL) url="$value" ;;
+            ANTHROPIC_FOUNDRY_RESOURCE) foundry_resource="$value" ;;
+            ANTHROPIC_FOUNDRY_BASE_URL) foundry_base_url="$value" ;;
+            ANTHROPIC_FOUNDRY_API_KEY) foundry_api_key="$value" ;;
             ANTHROPIC_DEFAULT_HAIKU_MODEL) haiku="$value" ;;
             ANTHROPIC_DEFAULT_OPUS_MODEL) opus="$value" ;;
             ANTHROPIC_DEFAULT_SONNET_MODEL) sonnet="$value" ;;
         esac
     done <<< "$config"
-
-    # Validate all required keys present
-    if [[ -z "${token:-}" || -z "${url:-}" || -z "${haiku:-}" || -z "${opus:-}" || -z "${sonnet:-}" ]]; then
-        error "Profile \"$profile\" is missing required fields"
-        return 1
-    fi
 
     # Ensure settings.json exists
     if ! ensure_settings_exists; then
@@ -449,8 +590,30 @@ cmd_switch() {
     # Backup first
     backup_settings
 
-    # Update settings
-    update_settings_json "$token" "$url" "$haiku" "$opus" "$sonnet"
+    case "$type" in
+        foundry)
+            if [[ -z "${foundry_resource:-}" && -z "${foundry_base_url:-}" ]]; then
+                error "Profile \"$profile\" missing ANTHROPIC_FOUNDRY_RESOURCE or ANTHROPIC_FOUNDRY_BASE_URL"
+                return 1
+            fi
+            if [[ -z "${foundry_api_key:-}" || -z "${haiku:-}" || -z "${opus:-}" || -z "${sonnet:-}" ]]; then
+                error "Profile \"$profile\" is missing required Foundry fields"
+                return 1
+            fi
+            update_settings_foundry "${foundry_resource:-}" "${foundry_base_url:-}" "$foundry_api_key" "$haiku" "$opus" "$sonnet"
+            ;;
+        anthropic)
+            if [[ -z "${token:-}" || -z "${url:-}" || -z "${haiku:-}" || -z "${opus:-}" || -z "${sonnet:-}" ]]; then
+                error "Profile \"$profile\" is missing required fields"
+                return 1
+            fi
+            update_settings_anthropic "$token" "$url" "$haiku" "$opus" "$sonnet"
+            ;;
+        *)
+            error "Unknown PROVIDER_TYPE for [$profile]: $type"
+            return 1
+            ;;
+    esac
 
     # Save active profile
     set_active_profile "$profile"
@@ -468,8 +631,14 @@ cmd_switch() {
         fi
     fi
 
-    success "Switched to profile: $profile"
-    echo "  Base URL: $url"
+    success "Switched to profile: $profile ($(cyan "$type"))"
+    if [[ "$type" == "foundry" ]]; then
+        local display_url
+        display_url=$(resolve_foundry_url "${foundry_resource:-}" "${foundry_base_url:-}")
+        echo "  Endpoint: $display_url"
+    else
+        echo "  Base URL: $url"
+    fi
     echo "  Haiku:    $haiku"
     echo "  Opus:     $opus"
     echo "  Sonnet:   $sonnet"
@@ -498,13 +667,20 @@ cmd_current() {
         local config
         config=$(read_profile "$active")
 
-        local url model
+        local type="anthropic" url model fres fbase
         while IFS='=' read -r key value; do
             case "$key" in
+                PROVIDER_TYPE) type="$value" ;;
                 ANTHROPIC_BASE_URL) url="$value" ;;
+                ANTHROPIC_FOUNDRY_RESOURCE) fres="$value" ;;
+                ANTHROPIC_FOUNDRY_BASE_URL) fbase="$value" ;;
                 ANTHROPIC_DEFAULT_SONNET_MODEL) model="$value" ;;
             esac
         done <<< "$config"
+
+        if [[ "$type" == "foundry" ]]; then
+            url="$(resolve_foundry_url "${fres:-}" "${fbase:-}")"
+        fi
 
         url="${url%/}"
         local host="${url#*://}"
@@ -529,19 +705,27 @@ cmd_status() {
 
     # Active profile
     if [[ -n "$active" ]]; then
-        local config url model
+        local config type="anthropic" url model fres fbase
         config=$(read_profile "$active")
         while IFS='=' read -r key value; do
             case "$key" in
+                PROVIDER_TYPE) type="$value" ;;
                 ANTHROPIC_BASE_URL) url="$value" ;;
+                ANTHROPIC_FOUNDRY_RESOURCE) fres="$value" ;;
+                ANTHROPIC_FOUNDRY_BASE_URL) fbase="$value" ;;
                 ANTHROPIC_DEFAULT_SONNET_MODEL) model="$value" ;;
             esac
         done <<< "$config"
+
+        if [[ "$type" == "foundry" ]]; then
+            url="$(resolve_foundry_url "${fres:-}" "${fbase:-}")"
+        fi
+
         url="${url%/}"
         local host="${url#*://}"
         host="${host%%/*}"
 
-        echo "  $(bold "Profile:")     $(green "●") $(bold "$active")"
+        echo "  $(bold "Profile:")     $(green "●") $(bold "$active") ($(cyan "$type"))"
         echo "  $(bold "Model:")       $(cyan "$model")"
         echo "  $(bold "Endpoint:")    $host"
     else
@@ -647,25 +831,64 @@ cmd_add() {
 
     echo "=== Add profile: $name ==="
     echo
+    echo "Provider types:"
+    echo "  1) anthropic  (Anthropic API, Kimi, OpenAI-compatible proxies)"
+    echo "  2) foundry    (Microsoft Azure Foundry)"
+    local type_choice type="anthropic"
+    read -r -p "Select type [1]: " type_choice
+    case "${type_choice:-1}" in
+        2|foundry) type="foundry" ;;
+        1|anthropic|"") type="anthropic" ;;
+        *)
+            error "Unknown type: $type_choice"
+            return 1
+            ;;
+    esac
+    echo
 
-    local token url haiku opus sonnet
-    read -r -p "ANTHROPIC_AUTH_TOKEN: " token
-    read -r -p "ANTHROPIC_BASE_URL: " url
-    read -r -p "ANTHROPIC_DEFAULT_HAIKU_MODEL: " haiku
-    read -r -p "ANTHROPIC_DEFAULT_OPUS_MODEL: " opus
-    read -r -p "ANTHROPIC_DEFAULT_SONNET_MODEL: " sonnet
-
-    # Validate
-    if [[ -z "$token" || -z "$url" || -z "$haiku" || -z "$opus" || -z "$sonnet" ]]; then
-        error "All fields are required"
-        return 1
-    fi
-
-    # Append to config
     mkdir -p "$CCS_DIR"
     chmod 600 "$PROVIDER_CONF" 2>/dev/null || true
 
-    cat >> "$PROVIDER_CONF" << EOF
+    if [[ "$type" == "foundry" ]]; then
+        local resource api_key haiku opus sonnet
+        read -r -p "ANTHROPIC_FOUNDRY_RESOURCE (Azure resource name): " resource
+        read -r -p "ANTHROPIC_FOUNDRY_API_KEY: " api_key
+        read -r -p "ANTHROPIC_DEFAULT_HAIKU_MODEL [claude-haiku-4-5]: " haiku
+        read -r -p "ANTHROPIC_DEFAULT_OPUS_MODEL [claude-opus-4-6]: " opus
+        read -r -p "ANTHROPIC_DEFAULT_SONNET_MODEL [claude-sonnet-4-6]: " sonnet
+        haiku="${haiku:-claude-haiku-4-5}"
+        opus="${opus:-claude-opus-4-6}"
+        sonnet="${sonnet:-claude-sonnet-4-6}"
+
+        if [[ -z "$resource" || -z "$api_key" ]]; then
+            error "ANTHROPIC_FOUNDRY_RESOURCE and ANTHROPIC_FOUNDRY_API_KEY are required"
+            return 1
+        fi
+
+        cat >> "$PROVIDER_CONF" << EOF
+
+[${name}]
+PROVIDER_TYPE=foundry
+ANTHROPIC_FOUNDRY_RESOURCE=${resource}
+ANTHROPIC_FOUNDRY_API_KEY=${api_key}
+ANTHROPIC_DEFAULT_HAIKU_MODEL=${haiku}
+ANTHROPIC_DEFAULT_OPUS_MODEL=${opus}
+ANTHROPIC_DEFAULT_SONNET_MODEL=${sonnet}
+EOF
+    else
+        local token url haiku opus sonnet
+        read -r -p "ANTHROPIC_AUTH_TOKEN: " token
+        read -r -p "ANTHROPIC_BASE_URL: " url
+        read -r -p "ANTHROPIC_DEFAULT_HAIKU_MODEL: " haiku
+        read -r -p "ANTHROPIC_DEFAULT_OPUS_MODEL: " opus
+        read -r -p "ANTHROPIC_DEFAULT_SONNET_MODEL: " sonnet
+
+        if [[ -z "$token" || -z "$url" || -z "$haiku" || -z "$opus" || -z "$sonnet" ]]; then
+            error "All fields are required"
+            return 1
+        fi
+
+        cat >> "$PROVIDER_CONF" << EOF
 
 [${name}]
 ANTHROPIC_AUTH_TOKEN=${token}
@@ -674,9 +897,10 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=${haiku}
 ANTHROPIC_DEFAULT_OPUS_MODEL=${opus}
 ANTHROPIC_DEFAULT_SONNET_MODEL=${sonnet}
 EOF
+    fi
 
     chmod 600 "$PROVIDER_CONF"
-    success "Added profile [${name}] to provider.conf"
+    success "Added profile [${name}] (${type}) to provider.conf"
     info "Run \"ccs ${name}\" to use it."
 }
 
@@ -801,14 +1025,25 @@ test_single_profile() {
     local config
     config=$(read_profile "$name")
 
-    local token url haiku model
+    local type="anthropic"
+    local token url model
+    local fres fbase fkey
     while IFS='=' read -r key value; do
         case "$key" in
+            PROVIDER_TYPE) type="$value" ;;
             ANTHROPIC_AUTH_TOKEN) token="$value" ;;
             ANTHROPIC_BASE_URL) url="$value" ;;
+            ANTHROPIC_FOUNDRY_RESOURCE) fres="$value" ;;
+            ANTHROPIC_FOUNDRY_BASE_URL) fbase="$value" ;;
+            ANTHROPIC_FOUNDRY_API_KEY) fkey="$value" ;;
             ANTHROPIC_DEFAULT_SONNET_MODEL) model="$value" ;;
         esac
     done <<< "$config"
+
+    if [[ "$type" == "foundry" ]]; then
+        test_foundry_profile "$name" "$timeout" "$detailed" "${fres:-}" "${fbase:-}" "${fkey:-}" "${model:-claude-sonnet-4-6}"
+        return
+    fi
 
     # Strip trailing slash from URL
     url="${url%/}"
@@ -880,6 +1115,74 @@ test_single_profile() {
         echo "  [$name]  $(red "✗ HTTP $http_code")  ${time_ms}ms  ${host}"
         if [[ -n "$detailed" ]]; then
             echo "    API key may have expired or endpoint is incorrect."
+        fi
+    fi
+}
+
+# Test a Foundry profile by POSTing a 1-token /v1/messages request to the
+# Azure Foundry anthropic-compat endpoint with the api-key header.
+test_foundry_profile() {
+    local name="$1"
+    local timeout="$2"
+    local detailed="$3"
+    local resource="$4"
+    local base_url="$5"
+    local api_key="$6"
+    local model="$7"
+
+    local url
+    url="$(resolve_foundry_url "$resource" "$base_url")"
+    local host="${url#*://}"
+    host="${host%%/*}"
+
+    local masked_key
+    if [[ ${#api_key} -gt 8 ]]; then
+        masked_key="${api_key:0:4}***${api_key: -4}"
+    else
+        masked_key="***"
+    fi
+
+    if [[ -n "$detailed" ]]; then
+        echo "  Endpoint:  $url"
+        echo "  Auth:      api-key $masked_key"
+        echo "  Model:     $model"
+        echo
+    fi
+
+    if [[ -z "$api_key" ]]; then
+        echo "  [$name]  $(yellow "⚠ SKIP") no api-key  ${host}  (foundry)"
+        if [[ -n "$detailed" ]]; then
+            echo "    Set ANTHROPIC_FOUNDRY_API_KEY in the profile to enable testing."
+        fi
+        return
+    fi
+
+    local curl_out http_code time_total time_ms
+    curl_out=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" \
+        --max-time "$timeout" \
+        --connect-timeout 3 \
+        -H "api-key: $api_key" \
+        -H "content-type: application/json" \
+        -H "anthropic-version: 2023-06-01" \
+        -d '{"model":"'"$model"'","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
+        "$url/v1/messages" 2>/dev/null || echo "000 0")
+
+    http_code="${curl_out%% *}"
+    time_total="${curl_out##* }"
+    time_ms=$(printf "%.0f" "$(echo "$time_total * 1000" | bc 2>/dev/null || echo "0")")
+
+    if [[ "$http_code" == "000" ]]; then
+        echo "  [$name]  $(red "✗ TIMEOUT") (>${timeout}s)  ${host}  (foundry)"
+    elif [[ "$http_code" == "200" ]]; then
+        echo "  [$name]  $(green "✓ OK")  ${time_ms}ms  ${host}  (foundry)"
+    else
+        echo "  [$name]  $(red "✗ HTTP $http_code")  ${time_ms}ms  ${host}  (foundry)"
+        if [[ -n "$detailed" ]]; then
+            case "$http_code" in
+                401|403) echo "    API key rejected — check ANTHROPIC_FOUNDRY_API_KEY." ;;
+                404)     echo "    Endpoint or deployment not found — check resource name and model deployment." ;;
+                *)       echo "    Foundry endpoint returned $http_code." ;;
+            esac
         fi
     fi
 }
