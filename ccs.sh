@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.2.0"
+readonly CCS_VERSION="1.2.1"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -1144,7 +1144,7 @@ test_foundry_profile() {
 
     if [[ -n "$detailed" ]]; then
         echo "  Endpoint:  $url"
-        echo "  Auth:      api-key $masked_key"
+        echo "  Auth:      x-api-key $masked_key"
         echo "  Model:     $model"
         echo
     fi
@@ -1158,10 +1158,12 @@ test_foundry_profile() {
     fi
 
     local curl_out http_code time_total time_ms
+    # Foundry's /anthropic/ endpoint mimics api.anthropic.com and accepts
+    # x-api-key (Anthropic convention), NOT Azure Cognitive Services' api-key header.
     curl_out=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" \
         --max-time "$timeout" \
         --connect-timeout 3 \
-        -H "api-key: $api_key" \
+        -H "x-api-key: $api_key" \
         -H "content-type: application/json" \
         -H "anthropic-version: 2023-06-01" \
         -d '{"model":"'"$model"'","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
