@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.2.1"
+readonly CCS_VERSION="1.2.2"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -776,14 +776,155 @@ cmd_reload() {
     cmd_switch "$active"
 }
 
+prompt_with_default() {
+    local label="$1" current="$2" var_name="$3"
+    local display input
+    # Mask tokens/keys in the prompt
+    case "$label" in
+        *TOKEN*|*API_KEY*)
+            if [[ ${#current} -gt 8 ]]; then
+                display="${current:0:4}***${current: -4}"
+            else
+                display="***"
+            fi
+            ;;
+        *)
+            display="$current"
+            ;;
+    esac
+    read -r -p "${label} [${display}]: " input
+    printf -v "$var_name" '%s' "${input:-$current}"
+}
+
+replace_profile_section() {
+    local name="$1" new_block="$2"
+    local tmpfile
+    tmpfile=$(mktemp)
+    local in_section=false section=""
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^\[([^\]]+)\] ]]; then
+            section="${BASH_REMATCH[1]}"
+            if [[ "$section" == "$name" ]]; then
+                in_section=true
+                printf '%s\n' "$new_block" >> "$tmpfile"
+                continue
+            else
+                in_section=false
+            fi
+        fi
+        if ! $in_section; then
+            echo "$line" >> "$tmpfile"
+        fi
+    done < "$PROVIDER_CONF"
+
+    mv "$tmpfile" "$PROVIDER_CONF"
+    chmod 600 "$PROVIDER_CONF"
+}
+
+cmd_edit_profile() {
+    local name="$1"
+
+    if ! list_profiles | grep -qx "$name"; then
+        error "Profile \"$name\" does not exist"
+        local available
+        available=$(list_profiles | tr '\n' ', ' | sed 's/, $//')
+        [[ -n "$available" ]] && echo "  Available: $available" >&2
+        return 1
+    fi
+
+    local config
+    config=$(read_profile "$name")
+
+    local type="anthropic"
+    local token url resource api_key haiku opus sonnet
+    while IFS='=' read -r key value; do
+        case "$key" in
+            PROVIDER_TYPE) type="$value" ;;
+            ANTHROPIC_AUTH_TOKEN) token="$value" ;;
+            ANTHROPIC_BASE_URL) url="$value" ;;
+            ANTHROPIC_FOUNDRY_RESOURCE) resource="$value" ;;
+            ANTHROPIC_FOUNDRY_API_KEY) api_key="$value" ;;
+            ANTHROPIC_DEFAULT_HAIKU_MODEL) haiku="$value" ;;
+            ANTHROPIC_DEFAULT_OPUS_MODEL) opus="$value" ;;
+            ANTHROPIC_DEFAULT_SONNET_MODEL) sonnet="$value" ;;
+        esac
+    done <<< "$config"
+
+    echo "=== Edit profile: $name (${type}) ==="
+    info "Press Enter to keep current value"
+    echo
+
+    local new_block
+    if [[ "$type" == "foundry" ]]; then
+        local n_resource n_api_key n_haiku n_opus n_sonnet
+        prompt_with_default "ANTHROPIC_FOUNDRY_RESOURCE" "$resource" n_resource
+        prompt_with_default "ANTHROPIC_FOUNDRY_API_KEY" "$api_key" n_api_key
+        prompt_with_default "ANTHROPIC_DEFAULT_HAIKU_MODEL" "$haiku" n_haiku
+        prompt_with_default "ANTHROPIC_DEFAULT_OPUS_MODEL" "$opus" n_opus
+        prompt_with_default "ANTHROPIC_DEFAULT_SONNET_MODEL" "$sonnet" n_sonnet
+
+        if [[ -z "$n_resource" || -z "$n_api_key" ]]; then
+            error "ANTHROPIC_FOUNDRY_RESOURCE and ANTHROPIC_FOUNDRY_API_KEY are required"
+            return 1
+        fi
+
+        new_block="[${name}]
+PROVIDER_TYPE=foundry
+ANTHROPIC_FOUNDRY_RESOURCE=${n_resource}
+ANTHROPIC_FOUNDRY_API_KEY=${n_api_key}
+ANTHROPIC_DEFAULT_HAIKU_MODEL=${n_haiku}
+ANTHROPIC_DEFAULT_OPUS_MODEL=${n_opus}
+ANTHROPIC_DEFAULT_SONNET_MODEL=${n_sonnet}"
+    else
+        local n_token n_url n_haiku n_opus n_sonnet
+        prompt_with_default "ANTHROPIC_AUTH_TOKEN" "$token" n_token
+        prompt_with_default "ANTHROPIC_BASE_URL" "$url" n_url
+        prompt_with_default "ANTHROPIC_DEFAULT_HAIKU_MODEL" "$haiku" n_haiku
+        prompt_with_default "ANTHROPIC_DEFAULT_OPUS_MODEL" "$opus" n_opus
+        prompt_with_default "ANTHROPIC_DEFAULT_SONNET_MODEL" "$sonnet" n_sonnet
+
+        if [[ -z "$n_token" || -z "$n_url" || -z "$n_haiku" || -z "$n_opus" || -z "$n_sonnet" ]]; then
+            error "All fields are required"
+            return 1
+        fi
+
+        new_block="[${name}]
+ANTHROPIC_AUTH_TOKEN=${n_token}
+ANTHROPIC_BASE_URL=${n_url}
+ANTHROPIC_DEFAULT_HAIKU_MODEL=${n_haiku}
+ANTHROPIC_DEFAULT_OPUS_MODEL=${n_opus}
+ANTHROPIC_DEFAULT_SONNET_MODEL=${n_sonnet}"
+    fi
+
+    replace_profile_section "$name" "$new_block"
+    success "Updated profile [${name}]"
+
+    # Re-apply if this is the active profile
+    local active
+    active="$(get_active_profile)"
+    if [[ "$name" == "$active" ]]; then
+        info "Reloading active profile..."
+        cmd_switch "$name"
+    fi
+}
+
 cmd_edit() {
-    local editor="${EDITOR:-vi}"
+    local name="${1:-}"
 
     if [[ ! -f "$PROVIDER_CONF" ]]; then
         warn "No provider.conf found."
         info "Run \"ccs add <name>\" to create your first profile."
         return 1
     fi
+
+    # Interactive edit of a single profile when name is given
+    if [[ -n "$name" ]]; then
+        cmd_edit_profile "$name"
+        return $?
+    fi
+
+    local editor="${EDITOR:-vi}"
 
     # Save original checksum
     local original_checksum
@@ -1346,7 +1487,7 @@ COMMANDS:
   current | active    Show active profile
   status              Show full status overview
   reload              Re-apply active profile after manual edit
-  edit                Open provider.conf in editor
+  edit [name]         Edit a profile interactively, or open provider.conf
   add <name>          Add new profile (interactive)
   remove <name>       Remove profile from provider.conf
   test [name]         Test API key/endpoint (default: test all)
@@ -1475,7 +1616,8 @@ main() {
             cmd_reload
             ;;
         edit)
-            cmd_edit
+            shift
+            cmd_edit "$@"
             ;;
         add)
             shift
