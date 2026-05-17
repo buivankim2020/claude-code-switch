@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.2.2"
+readonly CCS_VERSION="1.2.3"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -1490,7 +1490,7 @@ COMMANDS:
   edit [name]         Edit a profile interactively, or open provider.conf
   add <name>          Add new profile (interactive)
   remove <name>       Remove profile from provider.conf
-  test [name]         Test API key/endpoint (default: test all)
+  test | check [name] Test API key/endpoint (default: test all)
   backup              Backup current settings.json
   restore             Restore settings.json from backup
   update              Update CCS to latest version
@@ -1627,7 +1627,7 @@ main() {
             shift
             cmd_remove "$@"
             ;;
-        test)
+        test|check)
             shift
             cmd_test "$@"
             ;;
