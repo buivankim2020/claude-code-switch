@@ -7,6 +7,7 @@ CCS is a lightweight CLI tool (bash script) that lets you instantly switch Claud
 ## Features
 
 - **Instant profile switching** — one command to swap provider, API key, and models
+- **Project-level profiles** — assign different providers per project via `-p` / `--project` flag (optional, defaults to global)
 - **Multi-provider support** — Anthropic, Kimi, DeepSeek, Gemini, Azure Foundry, or any OpenAI-compatible API
 - **Safe** — auto-backup `settings.json` before every switch (keeps last 10); only CCS-managed keys are touched, everything else (theme, hooks, permissions, custom env vars) is left untouched
 - **Cross-platform** — Linux, macOS, WSL
@@ -67,14 +68,42 @@ ccs current
 ### Switch profile
 
 ```bash
-ccs <profile_name>
+ccs <profile_name>       # Global scope (default)
+ccs -p <profile_name>    # Project scope (current project)
 ```
 
 ```bash
-ccs opus        # Switch to Anthropic Opus
-ccs kimi        # Switch to Kimi AI
-ccs deepseek    # Switch to DeepSeek
-ccs gemini      # Switch to Google Gemini
+ccs opus        # Switch global profile to Anthropic Opus
+ccs kimi        # Switch global profile to Kimi AI
+ccs deepseek    # Switch global profile to DeepSeek
+ccs -p foundry  # Switch current project to Azure Foundry
+```
+
+### Scope: Global vs Project
+
+CCS supports two scopes:
+
+| Scope   | Flag         | Settings file                                  | Default |
+|---------|--------------|------------------------------------------------|---------|
+| global  | _(none)_     | `~/.claude/settings.json`                      | yes     |
+| project | `-p, --project` | `<project_root>/.claude/settings.local.json` | —       |
+
+- **Global** — applies to all Claude Code sessions regardless of working directory
+- **Project** — overrides global settings for a specific project; useful when different repos need different providers or API keys
+- Project scope auto-detects the project root by looking for `.git/` or `.claude/` directory
+- The `-p` flag works with: `<profile>`, `list`, `current`, `status`, `reload`, `backup`, `restore`
+
+```bash
+# Set a project-specific provider
+cd ~/work-repo
+ccs -p foundry    # Work repo uses corporate Foundry
+
+cd ~/side-project
+ccs -p opus       # Side project uses personal Anthropic key
+
+# Check which profile is active per scope
+ccs current       # → global active profile
+ccs -p current    # → project active profile
 ```
 
 ### Commands
@@ -98,10 +127,11 @@ ccs gemini      # Switch to Google Gemini
 
 ### Options
 
-| Flag           | Description             |
-|----------------|-------------------------|
-| `-y, --yes`    | Skip confirmation prompts |
-| `--no-color`   | Disable colored output  |
+| Flag              | Description                              |
+|-------------------|------------------------------------------|
+| `-p, --project`   | Apply to project-level settings          |
+| `-y, --yes`       | Skip confirmation prompts                |
+| `--no-color`      | Disable colored output                   |
 
 ## Configuration
 
@@ -112,7 +142,9 @@ ccs gemini      # Switch to Google Gemini
 ├── ccs.sh                  # Main script (symlinked to /usr/local/bin/ccs)
 ├── provider.conf           # Your profiles (chmod 600, contains API keys)
 ├── provider.conf.example   # Template for reference
-├── config.env              # CCS state (active profile, version)
+├── config.env              # CCS state (global active profile)
+├── projects/               # Per-project state files
+│   └── <md5_hash>.env      # Active profile for a specific project
 ├── ccs-completion.bash     # Bash tab completion
 ├── ccs-completion.zsh      # Zsh tab completion
 ├── .update_check           # Auto-update check cache
@@ -179,11 +211,18 @@ stale configuration.
 When you run `ccs <profile>`:
 
 1. Reads the profile from `provider.conf` and determines its `PROVIDER_TYPE`
-2. Backs up current `settings.json` to `~/.ccs/backups/`
+2. Backs up the current settings file to `~/.ccs/backups/`
 3. Cleans up old backups (keeps the 10 most recent)
-4. Updates **only** the managed keys in `settings.json` using `jq`, clearing any stale keys left over from a different provider type
-5. Saves the active profile to `config.env`
+4. Updates **only** the managed keys in the settings file using `jq`, clearing any stale keys left over from a different provider type
+5. Saves the active profile to the state file (`config.env` for global, `projects/<hash>.env` for project)
 6. Prompts to reload VSCode to apply changes
+
+With `ccs -p <profile>` (project scope):
+
+1. Detects the project root by walking up from `$PWD` looking for `.git/` or `.claude/`
+2. Targets `<project_root>/.claude/settings.local.json` instead of the global file
+3. Tracks the active profile independently per project in `~/.ccs/projects/<md5_hash>.env`
+4. Preserves existing project-level settings (permissions, hooks, etc.) — only the `.env` block is modified
 
 ## Azure Foundry setup
 
@@ -264,14 +303,14 @@ Testing all profiles (timeout: 5s, parallel)...
 
 ## Platform Support
 
-| Platform     | `settings.json` path                              |
-|--------------|----------------------------------------------------|
-| Linux        | `~/.claude/settings.json`                          |
-| macOS        | `~/.claude/settings.json`                          |
-| WSL (native) | `~/.claude/settings.json`                          |
-| WSL (Windows)| `/mnt/c/Users/<WinUser>/.claude/settings.json`     |
+| Platform     | Global settings path                              | Project settings path                       |
+|--------------|----------------------------------------------------|---------------------------------------------|
+| Linux        | `~/.claude/settings.json`                          | `<project>/.claude/settings.local.json`     |
+| macOS        | `~/.claude/settings.json`                          | `<project>/.claude/settings.local.json`     |
+| WSL (native) | `~/.claude/settings.json`                          | `<project>/.claude/settings.local.json`     |
+| WSL (Windows)| `/mnt/c/Users/<WinUser>/.claude/settings.json`     | `<project>/.claude/settings.local.json`     |
 
-CCS auto-detects the platform and resolves the correct path. You can also override it:
+CCS auto-detects the platform and resolves the correct path for global settings. Project settings always use `.claude/settings.local.json` within the project root. You can also override the settings path:
 
 ```bash
 export CCS_SETTINGS_PATH="/custom/path/to/settings.json"
