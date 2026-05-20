@@ -91,7 +91,8 @@ CCS supports two scopes:
 - **Global** — applies to all Claude Code sessions regardless of working directory
 - **Project** — overrides global settings for a specific project; useful when different repos need different providers or API keys
 - Project scope auto-detects the project root by looking for `.git/` or `.claude/` directory
-- The `-p` flag works with: `<profile>`, `list`, `current`, `status`, `reload`, `backup`, `restore`
+- The `-p` flag works with: `<profile>`, `list`, `current`, `status`, `reload`, `backup`, `restore`, `clear`
+- Use `ccs -p clear` to remove project-level config and fall back to the global profile
 
 ```bash
 # Set a project-specific provider
@@ -114,6 +115,7 @@ ccs -p current    # → project active profile
 | `ccs current`        | Show the currently active profile                |
 | `ccs status`         | Full status overview (profile + paths + platform) |
 | `ccs reload`         | Re-apply the active profile after editing its config |
+| `ccs clear`          | Remove project provider config, fall back to global (requires `-p`) |
 | `ccs edit`           | Open `provider.conf` in your editor (`$EDITOR`)  |
 | `ccs add <name>`     | Add a new profile interactively                  |
 | `ccs remove <name>`  | Remove a profile from `provider.conf`            |

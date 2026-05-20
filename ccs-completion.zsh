@@ -17,6 +17,7 @@ _ccs() {
     local commands=(
         'list:List all profiles'
         'current:Show active profile'
+        'clear:Remove project provider config (requires -p)'
         'edit:Open provider.conf in editor'
         'add:Add new profile'
         'remove:Remove profile'

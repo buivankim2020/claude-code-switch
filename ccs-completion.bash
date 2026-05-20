@@ -5,7 +5,7 @@
 _ccs_completions() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
-    local commands="list current edit add remove test backup restore update uninstall version help"
+    local commands="list current edit add remove test backup restore update uninstall version help clear"
     local provider_conf="${HOME}/.ccs/provider.conf"
 
     # Get profile names from provider.conf

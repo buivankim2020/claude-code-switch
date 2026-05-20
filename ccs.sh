@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.3.0"
+readonly CCS_VERSION="1.3.1"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -81,7 +81,7 @@ resolve_foundry_url() {
 }
 
 # Available commands
-readonly COMMANDS="list current edit add remove test backup restore update uninstall version help"
+readonly COMMANDS="list current edit add remove test backup restore update uninstall version help clear"
 
 #==============================================================================
 # Platform Detection
@@ -828,6 +828,51 @@ cmd_reload() {
     cmd_switch "$active"
 }
 
+cmd_clear() {
+    if [[ -z "${CCS_PROJECT_ROOT:-}" ]]; then
+        error "clear requires project scope. Use: ccs -p clear"
+        info "This removes project-level provider settings, falling back to global."
+        return 1
+    fi
+
+    local settings_path
+    settings_path="$(get_settings_path)"
+    local state_file
+    state_file="$(get_state_file)"
+
+    if [[ ! -f "$settings_path" ]]; then
+        warn "No project settings file found: $settings_path"
+        rm -f "$state_file"
+        success "Removed project state file (nothing else to do)"
+        return 0
+    fi
+
+    local env_keys
+    env_keys=$(jq -r '.env | keys[]' "$settings_path" 2>/dev/null || echo "")
+    if [[ -z "$env_keys" ]]; then
+        warn "No provider env keys in project settings"
+        rm -f "$state_file"
+        success "Removed project state file (nothing else to do)"
+        return 0
+    fi
+
+    echo "$(bold "This will remove the following from project settings:")"
+    echo "$env_keys" | while read -r k; do
+        echo "  - $k"
+    done
+    echo
+
+    if ! confirm "Remove project provider config and fall back to global?"; then
+        return 0
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp)
+    jq 'del(.env)' "$settings_path" > "$tmpfile" && mv "$tmpfile" "$settings_path"
+    rm -f "$state_file"
+    success "Cleared project provider config. This project now uses the global profile."
+}
+
 prompt_with_default() {
     local label="$1" current="$2" var_name="$3"
     local display input
@@ -1539,6 +1584,7 @@ COMMANDS:
   current | active    Show active profile
   status              Show full status overview
   reload              Re-apply active profile after manual edit
+  clear               Remove project provider config (requires -p)
   edit [name]         Edit a profile interactively, or open provider.conf
   add <name>          Add new profile (interactive)
   remove <name>       Remove profile from provider.conf
@@ -1559,6 +1605,7 @@ OPTIONS:
 EXAMPLES:
   ccs opus            Switch to Anthropic Opus profile (global)
   ccs -p opus         Switch profile for current project
+  ccs -p clear        Remove project config, fall back to global
   ccs list            List profiles
   ccs edit            Edit provider.conf
   ccs test            Test all profiles
@@ -1686,6 +1733,9 @@ main() {
             ;;
         reload)
             cmd_reload
+            ;;
+        clear)
+            cmd_clear
             ;;
         edit)
             shift
