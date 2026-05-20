@@ -14,9 +14,10 @@ _ccs_completions() {
         profiles=$(grep '^\[' "$provider_conf" 2>/dev/null | tr -d '[]' | tr '\n' ' ')
     fi
 
-    # First argument - commands or profile names
+    # First argument - flags, commands or profile names
     if [[ ${COMP_CWORD} -eq 1 ]]; then
-        COMPREPLY=($(compgen -W "$commands $profiles" -- "$cur"))
+        local flags="-p --project -y --yes -h --help -v --version --no-color"
+        COMPREPLY=($(compgen -W "$flags $commands $profiles" -- "$cur"))
         return
     fi
 

@@ -33,6 +33,7 @@ _ccs() {
         '(-h --help)'{-h,--help}'[Show help]' \
         '(-v --version)'{-v,--version}'[Show version]' \
         '(-y --yes)'{-y,--yes}'[Skip confirm prompts]' \
+        '(-p --project)'{-p,--project}'[Use project-level settings]' \
         '--no-color[Disable colored output]' \
         '1: :->command' \
         '*: :->args' \

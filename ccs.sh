@@ -11,7 +11,7 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.2.3"
+readonly CCS_VERSION="1.3.0"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -104,10 +104,30 @@ detect_platform() {
     esac
 }
 
+# Walk up from $PWD looking for a project root (.git/ or .claude/).
+# Echoes the path and returns 0 if found, returns 1 otherwise.
+find_project_root() {
+    local dir="${1:-$PWD}"
+    while [[ "$dir" != "/" ]]; do
+        if [[ -d "$dir/.git" ]] || [[ -d "$dir/.claude" ]]; then
+            echo "$dir"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
 get_settings_path() {
     # Check for user override first
     if [[ -n "${CCS_SETTINGS_PATH:-}" ]]; then
         echo "$CCS_SETTINGS_PATH"
+        return
+    fi
+
+    # Project scope: write to .claude/settings.local.json
+    if [[ -n "${CCS_PROJECT_ROOT:-}" ]]; then
+        echo "${CCS_PROJECT_ROOT}/.claude/settings.local.json"
         return
     fi
 
@@ -174,9 +194,24 @@ confirm() {
 #==============================================================================
 # Profile Config Management
 #==============================================================================
+
+# Return the state file path for the current scope.
+get_state_file() {
+    if [[ -n "${CCS_PROJECT_ROOT:-}" ]]; then
+        local hash
+        hash=$(echo -n "$CCS_PROJECT_ROOT" | md5sum | cut -d' ' -f1)
+        mkdir -p "${CCS_DIR}/projects"
+        echo "${CCS_DIR}/projects/${hash}.env"
+    else
+        echo "$CONFIG_FILE"
+    fi
+}
+
 get_active_profile() {
-    if [[ -f "$CONFIG_FILE" ]]; then
-        grep "^ACTIVE_PROFILE=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo ""
+    local state_file
+    state_file="$(get_state_file)"
+    if [[ -f "$state_file" ]]; then
+        grep "^ACTIVE_PROFILE=" "$state_file" 2>/dev/null | cut -d= -f2 || echo ""
     else
         echo ""
     fi
@@ -184,16 +219,18 @@ get_active_profile() {
 
 set_active_profile() {
     local profile="$1"
-    mkdir -p "$CCS_DIR"
-    if [[ -f "$CONFIG_FILE" ]]; then
-        if grep -q "^ACTIVE_PROFILE=" "$CONFIG_FILE"; then
-            sed -i.bak "s/^ACTIVE_PROFILE=.*/ACTIVE_PROFILE=${profile}/" "$CONFIG_FILE"
-            rm -f "${CONFIG_FILE}.bak"
+    local state_file
+    state_file="$(get_state_file)"
+    mkdir -p "$(dirname "$state_file")"
+    if [[ -f "$state_file" ]]; then
+        if grep -q "^ACTIVE_PROFILE=" "$state_file"; then
+            sed -i.bak "s/^ACTIVE_PROFILE=.*/ACTIVE_PROFILE=${profile}/" "$state_file"
+            rm -f "${state_file}.bak"
         else
-            echo "ACTIVE_PROFILE=${profile}" >> "$CONFIG_FILE"
+            echo "ACTIVE_PROFILE=${profile}" >> "$state_file"
         fi
     else
-        echo "ACTIVE_PROFILE=${profile}" > "$CONFIG_FILE"
+        echo "ACTIVE_PROFILE=${profile}" > "$state_file"
     fi
 }
 
@@ -631,7 +668,10 @@ cmd_switch() {
         fi
     fi
 
-    success "Switched to profile: $profile ($(cyan "$type"))"
+    local scope_label="global"
+    [[ -n "${CCS_PROJECT_ROOT:-}" ]] && scope_label="project"
+
+    success "Switched to profile: $profile ($(cyan "$type")) [$(cyan "$scope_label")]"
     if [[ "$type" == "foundry" ]]; then
         local display_url
         display_url=$(resolve_foundry_url "${foundry_resource:-}" "${foundry_base_url:-}")
@@ -648,7 +688,10 @@ cmd_list() {
     local active
     active="$(get_active_profile)"
 
-    echo "$(bold "Available profiles:")"
+    local scope_label="global"
+    [[ -n "${CCS_PROJECT_ROOT:-}" ]] && scope_label="project"
+
+    echo "$(bold "Available profiles:") [$(cyan "$scope_label")]"
     local profile
     for profile in $(list_profiles); do
         if [[ "$profile" == "$active" ]]; then
@@ -686,7 +729,10 @@ cmd_current() {
         local host="${url#*://}"
         host="${host%%/*}"
 
-        echo "$(green "●") $(bold "$active")  $(cyan "$model")  $host"
+        local scope_label="global"
+        [[ -n "${CCS_PROJECT_ROOT:-}" ]] && scope_label="project"
+
+        echo "$(green "●") $(bold "$active")  $(cyan "$model")  $host  [$(cyan "$scope_label")]"
     else
         warn "No profile is currently active"
     fi
@@ -701,6 +747,12 @@ cmd_status() {
     platform="$(detect_platform)"
 
     echo "$(bold "CCS Status")  v${CCS_VERSION}"
+    echo
+
+    local scope_label="global"
+    [[ -n "${CCS_PROJECT_ROOT:-}" ]] && scope_label="project ($CCS_PROJECT_ROOT)"
+
+    echo "  $(bold "Scope:")       $(cyan "$scope_label")"
     echo
 
     # Active profile
@@ -1502,18 +1554,21 @@ OPTIONS:
   -h, --help          Show this help
   -v, --version       Show version
   -y, --yes           Skip all confirm prompts
+  -p, --project       Use project-level settings (.claude/settings.local.json)
 
 EXAMPLES:
-  ccs opus            Switch to Anthropic Opus profile
+  ccs opus            Switch to Anthropic Opus profile (global)
+  ccs -p opus         Switch profile for current project
   ccs list            List profiles
   ccs edit            Edit provider.conf
   ccs test            Test all profiles
   CCS_TEST_TIMEOUT=10 ccs test  # Test with 10s timeout
 
 FILES:
-  ~/.ccs/provider.conf    Profile config file (managed by you)
-  ~/.ccs/config.env       CCS configuration
-  ~/.ccs/backups/         settings.json backups
+  ~/.ccs/provider.conf           Profile config file (managed by you)
+  ~/.ccs/config.env              CCS global configuration
+  ~/.ccs/projects/<hash>.env     CCS per-project configuration
+  ~/.ccs/backups/                settings.json backups
 
 EOF
 }
@@ -1554,6 +1609,7 @@ first_run_setup() {
 main() {
     # Parse global flags first
     local args=()
+    local _project_scope=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -y|--yes)
@@ -1567,6 +1623,10 @@ main() {
             -v|--version)
                 cmd_version
                 exit 0
+                ;;
+            -p|--project)
+                _project_scope=true
+                shift
                 ;;
             --no-color)
                 _use_color=false
@@ -1585,6 +1645,18 @@ main() {
     done
 
     set -- "${args[@]+"${args[@]}"}"
+
+    # Resolve project scope
+    if $_project_scope; then
+        local project_root
+        project_root="$(find_project_root || true)"
+        if [[ -z "$project_root" ]]; then
+            error "No project root found (no .git/ or .claude/ directory)"
+            info "Run ccs from within a project directory, or omit -p for global scope."
+            exit 1
+        fi
+        export CCS_PROJECT_ROOT="$project_root"
+    fi
 
     # Check dependencies
     if ! command -v jq &>/dev/null; then
