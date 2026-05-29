@@ -26,6 +26,7 @@ _ccs() {
         'restore:Restore from backup'
         'update:Update CCS'
         'uninstall:Uninstall CCS'
+        'clear:Remove project provider config (requires -p)'
         'version:Show version'
         'help:Show help'
     )

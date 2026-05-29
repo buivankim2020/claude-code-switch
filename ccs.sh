@@ -11,7 +11,22 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-readonly CCS_VERSION="1.3.1"
+# Derive version from ~/.ccs/VERSION, falling back to the shipped VERSION file
+_get_ccs_version() {
+    if [[ -f "${HOME}/.ccs/VERSION" ]]; then
+        head -1 "${HOME}/.ccs/VERSION"
+    else
+        local script_dir
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+        local version_file="${script_dir}/VERSION"
+        if [[ -f "$version_file" ]]; then
+            head -1 "$version_file"
+        else
+            echo "unknown"
+        fi
+    fi
+}
+readonly CCS_VERSION="$(_get_ccs_version)"
 readonly CCS_DIR="${HOME}/.ccs"
 readonly CONFIG_FILE="${CCS_DIR}/config.env"
 readonly PROVIDER_CONF="${CCS_DIR}/provider.conf"
@@ -232,6 +247,37 @@ set_active_profile() {
     else
         echo "ACTIVE_PROFILE=${profile}" > "$state_file"
     fi
+}
+
+# Resolve a profile name or numeric index to an actual profile name.
+# Echos the resolved name; returns 1 if not found.
+resolve_profile() {
+    local input="$1"
+    # If it's purely digits, treat it as an index
+    if [[ "$input" =~ ^[0-9]+$ ]]; then
+        local idx="$input"
+        local i=1
+        local profile
+        for profile in $(list_profiles); do
+            if [[ "$i" == "$idx" ]]; then
+                echo "$profile"
+                return 0
+            fi
+            ((i++)) || true
+        done
+        echo ""
+        return 1
+    fi
+    # Otherwise treat as a name
+    local p
+    for p in $(list_profiles); do
+        if [[ "$p" == "$input" ]]; then
+            echo "$input"
+            return 0
+        fi
+    done
+    echo ""
+    return 1
 }
 
 list_profiles() {
@@ -692,13 +738,15 @@ cmd_list() {
     [[ -n "${CCS_PROJECT_ROOT:-}" ]] && scope_label="project"
 
     echo "$(bold "Available profiles:") [$(cyan "$scope_label")]"
-    local profile
+    local profile i=1
     for profile in $(list_profiles); do
+        local prefix="  $(printf '%2d' "$i")"
         if [[ "$profile" == "$active" ]]; then
-            echo "  $(green "●") $profile $(green "(active)")"
+            echo "${prefix} $(green "●") $profile $(green "(active)")"
         else
-            echo "  ○ $profile"
+            echo "${prefix} ○ $profile"
         fi
+        ((i++)) || true
     done
 }
 
@@ -1464,6 +1512,8 @@ cmd_update() {
     if curl -sf --max-time 30 -o "$tmpfile" "${REPO_URL}/ccs.sh"; then
         chmod +x "$tmpfile"
         mv "$tmpfile" "${CCS_DIR}/ccs.sh"
+        # Also update the VERSION file
+        echo "$latest" > "${CCS_DIR}/VERSION"
         success "Updated to v${latest}"
         info "Run ccs again to use the new version"
     else
@@ -1577,10 +1627,10 @@ USAGE:
   ccs <command> [options]
 
 COMMANDS:
-  <profile>           Switch to specified profile
-                      e.g.: ccs opus, ccs kimi
+  <profile>           Switch to specified profile (by name or number)
+                      e.g.: ccs opus, ccs kimi, ccs 1
 
-  list                List all available profiles
+  list                List all available profiles (with numbers)
   current | active    Show active profile
   status              Show full status overview
   reload              Re-apply active profile after manual edit
@@ -1604,9 +1654,11 @@ OPTIONS:
 
 EXAMPLES:
   ccs opus            Switch to Anthropic Opus profile (global)
+  ccs 1               Switch to profile #1 (global)
+  ccs -p 3            Switch to profile #3 for current project
   ccs -p opus         Switch profile for current project
   ccs -p clear        Remove project config, fall back to global
-  ccs list            List profiles
+  ccs list            List profiles with numbers
   ccs edit            Edit provider.conf
   ccs test            Test all profiles
   CCS_TEST_TIMEOUT=10 ccs test  # Test with 10s timeout
@@ -1781,12 +1833,15 @@ main() {
             fi
             ;;
         *)
-            # Try to switch to profile
-            if list_profiles | grep -qx "$cmd"; then
-                cmd_switch "$cmd"
+            # Try to switch to profile by name or number
+            local resolved
+            resolved="$(resolve_profile "$cmd" 2>/dev/null || true)"
+            if [[ -n "$resolved" ]]; then
+                cmd_switch "$resolved"
             else
-                error "Invalid command: $cmd"
-                echo "  Available profiles: $(list_profiles | tr '\n' ' ')"
+                error "Invalid command or profile: $cmd"
+                echo "  Available: $(list_profiles | tr '
+' ' ')"
                 echo "  Run 'ccs help' for usage."
                 exit 1
             fi

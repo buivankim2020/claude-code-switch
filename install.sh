@@ -10,7 +10,18 @@
 set -e
 
 # Configuration
-readonly CCS_VERSION="1.3.1"
+# Derive version from VERSION file shipped alongside this script
+_get_ccs_version() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+    local version_file="${script_dir}/VERSION"
+    if [[ -f "$version_file" ]]; then
+        head -1 "$version_file"
+    else
+        echo "unknown"
+    fi
+}
+readonly CCS_VERSION="$(_get_ccs_version)"
 readonly REPO_URL="https://raw.githubusercontent.com/buivankim2020/claude-code-switch/main"
 readonly CCS_DIR="${HOME}/.ccs"
 
@@ -138,6 +149,7 @@ install_ccs() {
 
     # Download files
     download_file "ccs.sh" "${CCS_DIR}/ccs.sh"
+    download_file "VERSION" "${CCS_DIR}/VERSION"
     download_file "provider.conf.example" "${CCS_DIR}/provider.conf.example"
     download_file "ccs-completion.bash" "${CCS_DIR}/ccs-completion.bash"
     download_file "ccs-completion.zsh" "${CCS_DIR}/ccs-completion.zsh"

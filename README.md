@@ -70,14 +70,17 @@ ccs current
 ```bash
 ccs <profile_name>       # Global scope (default)
 ccs -p <profile_name>    # Project scope (current project)
+ccs 1                    # Switch by number (shown in ccs list)
+ccs -p 3                 # Project switch by number
 ```
 
 ```bash
 ccs opus        # Switch global profile to Anthropic Opus
 ccs kimi        # Switch global profile to Kimi AI
 ccs deepseek    # Switch global profile to DeepSeek
+ccs 1           # Switch to profile #1
 ccs -p foundry  # Switch current project to Azure Foundry
-```
+ccs -p 2        # Switch current project to profile #2
 
 ### Scope: Global vs Project
 
@@ -92,6 +95,7 @@ CCS supports two scopes:
 - **Project** — overrides global settings for a specific project; useful when different repos need different providers or API keys
 - Project scope auto-detects the project root by looking for `.git/` or `.claude/` directory
 - The `-p` flag works with: `<profile>`, `list`, `current`, `status`, `reload`, `backup`, `restore`, `clear`
+- Profile numbers work in both scopes: `ccs 1` (global #1) or `ccs -p 2` (project #2), `clear`
 - Use `ccs -p clear` to remove project-level config and fall back to the global profile
 
 ```bash
@@ -111,10 +115,11 @@ ccs -p current    # → project active profile
 
 | Command              | Description                                      |
 |----------------------|--------------------------------------------------|
-| `ccs list`           | List all available profiles                      |
+| `ccs list`           | List all available profiles with numbers         |
 | `ccs current`        | Show the currently active profile                |
 | `ccs status`         | Full status overview (profile + paths + platform) |
 | `ccs reload`         | Re-apply the active profile after editing its config |
+| `ccs clear`          | Remove project provider config, fall back to global (requires `-p`) |
 | `ccs clear`          | Remove project provider config, fall back to global (requires `-p`) |
 | `ccs edit`           | Open `provider.conf` in your editor (`$EDITOR`)  |
 | `ccs add <name>`     | Add a new profile interactively                  |
@@ -142,6 +147,7 @@ ccs -p current    # → project active profile
 ```
 ~/.ccs/
 ├── ccs.sh                  # Main script (symlinked to /usr/local/bin/ccs)
+├── VERSION                 # Current installed version (single source of truth)
 ├── provider.conf           # Your profiles (chmod 600, contains API keys)
 ├── provider.conf.example   # Template for reference
 ├── config.env              # CCS state (global active profile)
