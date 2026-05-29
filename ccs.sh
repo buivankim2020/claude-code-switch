@@ -994,13 +994,17 @@ replace_profile_section() {
 cmd_edit_profile() {
     local name="$1"
 
-    if ! list_profiles | grep -qx "$name"; then
+    # Resolve by name or number
+    local resolved
+    resolved="$(resolve_profile "$name" 2>/dev/null || true)"
+    if [[ -z "$resolved" ]]; then
         error "Profile \"$name\" does not exist"
         local available
         available=$(list_profiles | tr '\n' ', ' | sed 's/, $//')
         [[ -n "$available" ]] && echo "  Available: $available" >&2
         return 1
     fi
+    name="$resolved"
 
     local config
     config=$(read_profile "$name")
@@ -1089,7 +1093,13 @@ cmd_edit() {
 
     # Interactive edit of a single profile when name is given
     if [[ -n "$name" ]]; then
-        cmd_edit_profile "$name"
+        local resolved
+        resolved="$(resolve_profile "$name" 2>/dev/null || true)"
+        if [[ -z "$resolved" ]]; then
+            error "Profile "$name" does not exist"
+            return 1
+        fi
+        cmd_edit_profile "$resolved"
         return $?
     fi
 
@@ -1218,17 +1228,18 @@ cmd_remove() {
     local name="${1:-}"
 
     if [[ -z "$name" ]]; then
-        error "Usage: ccs remove <profile_name>"
+        error "Usage: ccs remove <profile_name|number>"
         return 1
     fi
-
-    # Check if exists
-    if ! list_profiles | grep -qx "$name"; then
+    # Resolve by name or number
+    local resolved
+    resolved="$(resolve_profile "$name" 2>/dev/null || true)"
+    if [[ -z "$resolved" ]]; then
         error "Profile \"$name\" does not exist"
         return 1
     fi
+    name="$resolved"
 
-    # Check if active
     local active
     active="$(get_active_profile)"
     if [[ "$name" == "$active" ]]; then
@@ -1316,7 +1327,12 @@ cmd_test() {
         info "Tested $count profiles"
         return 0
     else
-        # Test specific profile
+        # Test specific profile (by name or number)
+        local resolved
+        resolved="$(resolve_profile "$target" 2>/dev/null || true)"
+        if [[ -n "$resolved" ]]; then
+            target="$resolved"
+        fi
         if ! list_profiles | grep -qx "$target"; then
             error "Profile \"$target\" does not exist"
             return 1
