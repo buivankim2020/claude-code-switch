@@ -11,19 +11,43 @@ set -euo pipefail
 #==============================================================================
 # Constants
 #==============================================================================
-# Derive version from ~/.ccs/VERSION, falling back to the shipped VERSION file
+# Derive version from ~/.ccs/VERSION, falling back to the shipped VERSION file,
+# and finally to the remote repo (cached for 4h to avoid excessive network calls).
 _get_ccs_version() {
+    # 1) ~/.ccs/VERSION (populated by install or update)
     if [[ -f "${HOME}/.ccs/VERSION" ]]; then
         head -1 "${HOME}/.ccs/VERSION"
-    else
-        local script_dir
-        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
-        local version_file="${script_dir}/VERSION"
-        if [[ -f "$version_file" ]]; then
-            head -1 "$version_file"
-        else
-            echo "unknown"
+        return
+    fi
+    # 2) VERSION file shipped alongside the script
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+    local version_file="${script_dir}/VERSION"
+    if [[ -f "$version_file" ]]; then
+        head -1 "$version_file"
+        return
+    fi
+    # 3) One-time remote fetch + cache (backward compat for old installs)
+    local cache_file="${HOME}/.ccs/.version_cache"
+    local max_age=14400  # 4 hours
+    if [[ -f "$cache_file" ]]; then
+        local mtime
+        mtime=$(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo "0")
+        local now
+        now=$(date +%s)
+        if [[ $(( now - mtime )) -lt $max_age ]]; then
+            head -1 "$cache_file"
+            return
         fi
+    fi
+    local remote_ver
+    remote_ver=$(curl -sf --max-time 5 "https://raw.githubusercontent.com/buivankim2020/claude-code-switch/main/VERSION" 2>/dev/null || echo "")
+    if [[ -n "$remote_ver" ]]; then
+        mkdir -p "${HOME}/.ccs"
+        echo "$remote_ver" > "$cache_file"
+        echo "$remote_ver"
+    else
+        echo "unknown"
     fi
 }
 readonly CCS_VERSION="$(_get_ccs_version)"
