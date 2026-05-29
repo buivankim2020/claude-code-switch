@@ -865,12 +865,15 @@ cmd_status() {
         ((count++)) || true
     done
     echo "  $(bold "Profiles:")    $count available"
+    local pi=1
     for p in $profiles; do
+        local pfx="$(printf '%2d' "$pi")"
         if [[ "$p" == "$active" ]]; then
-            echo "                 $(green "●") $p"
+            echo "               ${pfx} $(green "●") $p"
         else
-            echo "                 ○ $p"
+            echo "               ${pfx} ○ $p"
         fi
+        ((pi++)) || true
     done
 
     echo
