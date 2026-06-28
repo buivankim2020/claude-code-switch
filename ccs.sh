@@ -1418,7 +1418,7 @@ test_single_profile() {
             --connect-timeout 3 \
             -H "Authorization: Bearer $token" \
             -H "content-type: application/json" \
-            -d '{"model":"'"$model"'","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
+            -d '{"model":"'"$model"'","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}' \
             "$url/v1/chat/completions" 2>/dev/null || echo "000 0")
     else
         curl_out=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" \
@@ -1427,7 +1427,7 @@ test_single_profile() {
             -H "x-api-key: $token" \
             -H "content-type: application/json" \
             -H "anthropic-version: 2023-06-01" \
-            -d '{"model":"'"$model"'","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
+            -d '{"model":"'"$model"'","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}' \
             "$url/v1/messages" 2>/dev/null || echo "000 0")
     fi
 
@@ -1495,7 +1495,7 @@ test_foundry_profile() {
         -H "x-api-key: $api_key" \
         -H "content-type: application/json" \
         -H "anthropic-version: 2023-06-01" \
-        -d '{"model":"'"$model"'","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
+        -d '{"model":"'"$model"'","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}' \
         "$url/v1/messages" 2>/dev/null || echo "000 0")
 
     http_code="${curl_out%% *}"
