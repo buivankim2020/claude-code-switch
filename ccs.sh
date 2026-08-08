@@ -1304,15 +1304,16 @@ cmd_test() {
             return 1
         fi
 
-        local count=0
+        local count=0 idx=0
         local tmpdir
         tmpdir=$(mktemp -d)
 
         # Test in parallel, capture output per profile
         for profile in $profiles; do
+            ((idx++)) || true
             (
                 set +e
-                test_single_profile "$profile" "$timeout" > "$tmpdir/$profile" 2>&1
+                test_single_profile "$profile" "$timeout" "" "$idx" > "$tmpdir/$profile" 2>&1
             ) &
             ((count++)) || true
         done
@@ -1350,6 +1351,7 @@ test_single_profile() {
     local name="$1"
     local timeout="$2"
     local detailed="${3:-}"
+    local idx="${4:-}"
 
     local config
     config=$(read_profile "$name")
@@ -1369,8 +1371,15 @@ test_single_profile() {
         esac
     done <<< "$config"
 
+    local label
+    if [[ -n "$idx" ]]; then
+        label="$(printf '%2d' "$idx") [$name]"
+    else
+        label="[$name]"
+    fi
+
     if [[ "$type" == "foundry" ]]; then
-        test_foundry_profile "$name" "$timeout" "$detailed" "${fres:-}" "${fbase:-}" "${fkey:-}" "${model:-claude-sonnet-4-6}"
+        test_foundry_profile "$name" "$timeout" "$detailed" "${fres:-}" "${fbase:-}" "${fkey:-}" "${model:-claude-sonnet-4-6}" "$idx"
         return
     fi
 
@@ -1437,11 +1446,11 @@ test_single_profile() {
     time_ms=$(printf "%.0f" "$(echo "$time_total * 1000" | bc 2>/dev/null || echo "0")")
 
     if [[ "$http_code" == "000" ]]; then
-        echo "  [$name]  $(red "✗ TIMEOUT") (>${timeout}s)  ${host}"
+        echo "  ${label}  $(red "✗ TIMEOUT") (>${timeout}s)  ${host}"
     elif [[ "$http_code" == "200" ]]; then
-        echo "  [$name]  $(green "✓ OK")  ${time_ms}ms  ${host}  (${api_type})"
+        echo "  ${label}  $(green "✓ OK")  ${time_ms}ms  ${host}  (${api_type})"
     else
-        echo "  [$name]  $(red "✗ HTTP $http_code")  ${time_ms}ms  ${host}"
+        echo "  ${label}  $(red "✗ HTTP $http_code")  ${time_ms}ms  ${host}"
         if [[ -n "$detailed" ]]; then
             echo "    API key may have expired or endpoint is incorrect."
         fi
@@ -1458,6 +1467,14 @@ test_foundry_profile() {
     local base_url="$5"
     local api_key="$6"
     local model="$7"
+    local idx="${8:-}"
+
+    local label
+    if [[ -n "$idx" ]]; then
+        label="$(printf '%2d' "$idx") [$name]"
+    else
+        label="[$name]"
+    fi
 
     local url
     url="$(resolve_foundry_url "$resource" "$base_url")"
@@ -1479,7 +1496,7 @@ test_foundry_profile() {
     fi
 
     if [[ -z "$api_key" ]]; then
-        echo "  [$name]  $(yellow "⚠ SKIP") no api-key  ${host}  (foundry)"
+        echo "  ${label}  $(yellow "⚠ SKIP") no api-key  ${host}  (foundry)"
         if [[ -n "$detailed" ]]; then
             echo "    Set ANTHROPIC_FOUNDRY_API_KEY in the profile to enable testing."
         fi
@@ -1503,11 +1520,11 @@ test_foundry_profile() {
     time_ms=$(printf "%.0f" "$(echo "$time_total * 1000" | bc 2>/dev/null || echo "0")")
 
     if [[ "$http_code" == "000" ]]; then
-        echo "  [$name]  $(red "✗ TIMEOUT") (>${timeout}s)  ${host}  (foundry)"
+        echo "  ${label}  $(red "✗ TIMEOUT") (>${timeout}s)  ${host}  (foundry)"
     elif [[ "$http_code" == "200" ]]; then
-        echo "  [$name]  $(green "✓ OK")  ${time_ms}ms  ${host}  (foundry)"
+        echo "  ${label}  $(green "✓ OK")  ${time_ms}ms  ${host}  (foundry)"
     else
-        echo "  [$name]  $(red "✗ HTTP $http_code")  ${time_ms}ms  ${host}  (foundry)"
+        echo "  ${label}  $(red "✗ HTTP $http_code")  ${time_ms}ms  ${host}  (foundry)"
         if [[ -n "$detailed" ]]; then
             case "$http_code" in
                 401|403) echo "    API key rejected — check ANTHROPIC_FOUNDRY_API_KEY." ;;
