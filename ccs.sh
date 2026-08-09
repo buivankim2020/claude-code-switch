@@ -3,7 +3,7 @@
 # CCS - Claude Code Switch
 # Quick switch between multiple AI provider profiles for Claude Code
 #
-# Version: 1.4.7
+# Version: 1.4.8
 # License: MIT
 
 set -euo pipefail
@@ -62,6 +62,8 @@ readonly CUSTOM_PROMPT_DIR="${CCS_DIR}/custom-model"
 readonly CUSTOM_PROMPT_FILE="${CUSTOM_PROMPT_DIR}/gpt-custom-prompt.md"
 readonly CUSTOM_PROMPT_BEGIN='<!-- CCS-CUSTOM-PROMPT:BEGIN -->'
 readonly CUSTOM_PROMPT_END='<!-- CCS-CUSTOM-PROMPT:END -->'
+readonly CUSTOM_PROMPT_NO_FINAL_NEWLINE='<!-- CCS-CUSTOM-PROMPT:ORIGINAL-EOF:NO-NL -->'
+readonly CUSTOM_PROMPT_BACKUP_LIMIT=50
 
 # Known provider types
 readonly KNOWN_TYPES="anthropic foundry"
@@ -380,43 +382,217 @@ is_custom_prompt_enabled() {
     [[ "$custom_prompt" == "1" ]]
 }
 
-remove_custom_prompt_block() {
+cleanup_custom_prompt_files() {
+    local path
+    for path in "$@"; do
+        if [[ -n "$path" ]]; then
+            rm -f "$path" 2>/dev/null || true
+        fi
+    done
+    return 0
+}
+
+resolve_custom_prompt_target() {
     local target="$1"
-    if [[ ! -f "$target" ]]; then
+    local depth=0
+
+    while [[ -L "$target" ]]; do
+        depth=$((depth + 1))
+        if [[ "$depth" -gt 40 ]]; then
+            return 1
+        fi
+
+        local link_target
+        link_target=$(readlink "$target") || return 1
+        if [[ "$link_target" == /* ]]; then
+            target="$link_target"
+        else
+            target="$(dirname "$target")/${link_target}"
+        fi
+    done
+
+    local parent_dir
+    parent_dir=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P) || return 1
+    printf '%s/%s\n' "$parent_dir" "$(basename "$target")"
+}
+
+get_custom_prompt_block_bounds() {
+    local target="$1"
+    local file_size
+    file_size=$(wc -c < "$target") || return 1
+    file_size="${file_size//[[:space:]]/}"
+
+    # Report exact-line marker counts and zero-based byte offsets. The source is
+    # never rebuilt, so all bytes outside a valid managed block remain intact.
+    LC_ALL=C awk \
+        -v begin="$CUSTOM_PROMPT_BEGIN" \
+        -v end="$CUSTOM_PROMPT_END" \
+        -v no_final_newline="$CUSTOM_PROMPT_NO_FINAL_NEWLINE" \
+        -v size="$file_size" '
+        BEGIN { offset = 0 }
+        {
+            raw = $0
+            line = raw
+            sub(/\r$/, "", line)
+            record_start = offset
+
+            if (line == begin) {
+                begin_count++
+                if (begin_count == 1) {
+                    begin_offset = record_start
+                    inside_first_block = 1
+                }
+            } else if (line == end) {
+                end_count++
+                if (end_count == 1) {
+                    end_offset = record_start
+                    block_end = record_start + length(raw) + 1
+                    if (block_end > size) block_end = size
+                }
+                inside_first_block = 0
+            } else if (inside_first_block && line == no_final_newline) {
+                no_final_newline_count++
+            }
+
+            # awk records omit LF but retain CR, so this is the next byte offset.
+            offset += length(raw) + 1
+        }
+        END {
+            printf "%d %d %.0f %.0f %.0f %d\n", \
+                begin_count + 0, end_count + 0, begin_offset + 0, \
+                end_offset + 0, block_end + 0, no_final_newline_count + 0
+        }
+    ' "$target"
+}
+
+get_custom_prompt_block_start() {
+    local target="$1"
+    local begin_offset="$2"
+    local no_final_newline_count="$3"
+
+    if [[ "$no_final_newline_count" -eq 0 ]]; then
+        printf '%s\n' "$begin_offset"
+        return 0
+    fi
+    if [[ "$no_final_newline_count" -ne 1 || "$begin_offset" -lt 1 ]]; then
         return 1
     fi
 
-    local marker_info
-    if ! marker_info=$(awk -v begin="$CUSTOM_PROMPT_BEGIN" -v end="$CUSTOM_PROMPT_END" '
-        {
-            line = $0
-            sub(/\r$/, "", line)
-            lines[NR] = line
-            if (line == begin) {
-                begin_count++
-                if (begin_count == 1) begin_line = NR
-            }
-            if (line == end) {
-                end_count++
-                if (end_count == 1) end_line = NR
-            }
-        }
-        END {
-            printf "%d %d %d %d\n", begin_count + 0, end_count + 0, begin_line + 0, end_line + 0
-        }
-    ' "$target"); then
-        warn "Cannot inspect custom prompt markers in $target"
+    local preceding_byte
+    preceding_byte=$(LC_ALL=C head -c "$begin_offset" "$target" \
+        | tail -c 1 | od -An -t x1 | tr -d '[:space:]') || return 1
+    [[ "$preceding_byte" == "0a" ]] || return 1
+    printf '%s\n' "$((begin_offset - 1))"
+}
+
+backup_claude_md() {
+    local target="$1"
+    local source="$2"
+    local mode="${3:-unknown}"
+    local backup_root="${BACKUP_DIR}/claude-md"
+
+    if ! mkdir -p "$backup_root" 2>/dev/null || ! chmod 700 "$backup_root"; then
+        warn "Cannot create CLAUDE.md backup directory"
+        return 1
+    fi
+
+    local tmp_entry=""
+    local final_entry=""
+    local attempt
+    for attempt in 1 2 3; do
+        tmp_entry=$(mktemp -d "${backup_root}/.tmp.XXXXXX") || return 1
+        final_entry="${backup_root}/backup.${tmp_entry##*.tmp.}"
+        if [[ ! -e "$final_entry" ]]; then
+            break
+        fi
+        rm -rf "$tmp_entry"
+        tmp_entry=""
+    done
+    if [[ -z "$tmp_entry" || -e "$final_entry" ]]; then
+        [[ -n "$tmp_entry" ]] && rm -rf "$tmp_entry"
+        warn "Cannot allocate CLAUDE.md backup entry"
+        return 1
+    fi
+
+    if ! cp "$source" "${tmp_entry}/CLAUDE.md" \
+        || ! printf '%s\n' "$target" > "${tmp_entry}/target.path" \
+        || ! printf '%s\n' "$mode" > "${tmp_entry}/mode" \
+        || ! chmod 600 "${tmp_entry}/CLAUDE.md" "${tmp_entry}/target.path" "${tmp_entry}/mode"; then
+        rm -rf "$tmp_entry"
+        warn "Cannot back up $target"
+        return 1
+    fi
+
+    # Bound recovery storage globally. Cleanup happens before publication, so
+    # the backup for the pending mutation cannot be selected for deletion.
+    local entries=()
+    local entry
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] && entries+=("$entry")
+    done < <(ls -1td "${backup_root}/"backup.* 2>/dev/null || true)
+
+    local index
+    for ((index=${#entries[@]} - 1; index >= CUSTOM_PROMPT_BACKUP_LIMIT - 1; index--)); do
+        if ! rm -rf "${entries[$index]}"; then
+            rm -rf "$tmp_entry"
+            warn "Cannot rotate CLAUDE.md backups"
+            return 1
+        fi
+    done
+
+    if ! mv "$tmp_entry" "$final_entry"; then
+        rm -rf "$tmp_entry"
+        warn "Cannot publish CLAUDE.md backup"
+        return 1
+    fi
+
+    return 0
+}
+
+remove_custom_prompt_block() {
+    local requested_target="$1"
+    if [[ ! -f "$requested_target" ]]; then
+        return 1
+    fi
+
+    local target
+    if ! target=$(resolve_custom_prompt_target "$requested_target"); then
+        warn "Cannot resolve $requested_target"
         return 2
     fi
 
-    local begin_count end_count begin_line end_line
-    read -r begin_count end_count begin_line end_line <<< "$marker_info"
+    local snapshot
+    if ! snapshot=$(mktemp "${target}.snapshot.XXXXXX") || ! cp "$target" "$snapshot"; then
+        [[ -n "${snapshot:-}" ]] && rm -f "$snapshot"
+        warn "Cannot snapshot $requested_target"
+        return 2
+    fi
+
+    local marker_info
+    if ! marker_info=$(get_custom_prompt_block_bounds "$snapshot"); then
+        rm -f "$snapshot"
+        warn "Cannot inspect custom prompt markers in $requested_target"
+        return 2
+    fi
+
+    local begin_count end_count begin_offset end_offset block_end no_final_newline_count
+    read -r begin_count end_count begin_offset end_offset block_end no_final_newline_count <<< "$marker_info"
 
     if [[ "$begin_count" -eq 0 && "$end_count" -eq 0 ]]; then
+        rm -f "$snapshot"
         return 1
     fi
-    if [[ "$begin_count" -ne 1 || "$end_count" -ne 1 || "$begin_line" -ge "$end_line" ]]; then
-        warn "Malformed custom prompt markers in $target; leaving file unchanged"
+    if [[ "$begin_count" -ne 1 || "$end_count" -ne 1 \
+        || "$begin_offset" -ge "$end_offset" || "$no_final_newline_count" -gt 1 ]]; then
+        rm -f "$snapshot"
+        warn "Malformed custom prompt markers in $requested_target; leaving file unchanged"
+        return 2
+    fi
+
+    local block_start
+    if ! block_start=$(get_custom_prompt_block_start "$snapshot" "$begin_offset" "$no_final_newline_count"); then
+        rm -f "$snapshot"
+        warn "Malformed custom prompt metadata in $requested_target; leaving file unchanged"
         return 2
     fi
 
@@ -425,184 +601,175 @@ remove_custom_prompt_block() {
 
     local tmpfile
     if ! tmpfile=$(mktemp "${target}.tmp.XXXXXX"); then
-        warn "Cannot create temporary file for $target"
+        rm -f "$snapshot"
+        warn "Cannot create temporary file for $requested_target"
         return 2
     fi
 
-    # Rewrite with CR stripped from lines so CRLF markers match consistently.
-    if ! awk -v first="$begin_line" -v last="$end_line" '
-        {
-            line = $0
-            sub(/\r$/, "", line)
-            lines[NR] = line
-        }
-        END {
-            remove_before = (first > 1 && lines[first - 1] == "")
-            remove_after = (!remove_before && last < NR && lines[last + 1] == "")
-            for (i = 1; i <= NR; i++) {
-                if (i >= first && i <= last) continue
-                if (remove_before && i == first - 1) continue
-                if (remove_after && i == last + 1) continue
-                print lines[i]
-            }
-        }
-    ' "$target" > "$tmpfile"; then
-        rm -f "$tmpfile"
-        warn "Cannot rewrite $target"
+    if ! LC_ALL=C head -c "$block_start" "$snapshot" > "$tmpfile" \
+        || ! LC_ALL=C tail -c "+$((block_end + 1))" "$snapshot" >> "$tmpfile"; then
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Cannot rewrite $requested_target"
         return 2
     fi
 
     if [[ -n "$mode" ]] && ! chmod "$mode" "$tmpfile"; then
-        rm -f "$tmpfile"
-        warn "Cannot preserve permissions for $target"
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Cannot preserve permissions for $requested_target"
+        return 2
+    fi
+    if ! cmp -s "$target" "$snapshot"; then
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "$requested_target changed during prompt removal; leaving it unchanged"
+        return 2
+    fi
+    if ! backup_claude_md "$target" "$snapshot" "$mode"; then
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Leaving $requested_target unchanged because its backup failed"
+        return 2
+    fi
+    if ! cmp -s "$target" "$snapshot"; then
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "$requested_target changed during backup; leaving it unchanged"
         return 2
     fi
     if ! mv "$tmpfile" "$target"; then
-        rm -f "$tmpfile"
-        warn "Cannot replace $target"
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Cannot replace $requested_target"
         return 2
     fi
 
+    rm -f "$snapshot"
     return 0
 }
 
 inject_custom_prompt_block() {
-    local target="$1"
+    local requested_target="$1"
     local prompt_source="$2"
 
-    # Validate source before touching the target.
     if [[ ! -f "$prompt_source" || ! -s "$prompt_source" ]]; then
         warn "Custom prompt source is missing or empty: $prompt_source"
         return 1
     fi
-    if grep -Fq "$CUSTOM_PROMPT_BEGIN" "$prompt_source" || grep -Fq "$CUSTOM_PROMPT_END" "$prompt_source"; then
+    if grep -Fq "$CUSTOM_PROMPT_BEGIN" "$prompt_source" \
+        || grep -Fq "$CUSTOM_PROMPT_END" "$prompt_source" \
+        || grep -Fq "$CUSTOM_PROMPT_NO_FINAL_NEWLINE" "$prompt_source"; then
         warn "Custom prompt source contains a reserved marker: $prompt_source"
         return 1
     fi
 
-    local parent_dir
-    parent_dir=$(dirname "$target")
-    if ! mkdir -p "$parent_dir"; then
-        warn "Cannot create directory for $target"
+    local requested_parent
+    requested_parent=$(dirname "$requested_target")
+    if ! mkdir -p "$requested_parent"; then
+        warn "Cannot create directory for $requested_target"
         return 1
     fi
 
-    # Inspect existing target markers without mutating it.
-    # begin_count/end_count of 0/0 is fine (no prior block).
-    # Any other mismatch is malformed and must leave the target unchanged.
-    local mode=""
-    local begin_count=0 end_count=0 begin_line=0 end_line=0
-    if [[ -f "$target" ]]; then
-        mode=$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)
+    local target
+    if ! target=$(resolve_custom_prompt_target "$requested_target"); then
+        warn "Cannot resolve $requested_target"
+        return 1
+    fi
+    if ! mkdir -p "$(dirname "$target")"; then
+        warn "Cannot create directory for $requested_target"
+        return 1
+    fi
 
-        local marker_info
-        if ! marker_info=$(awk -v begin="$CUSTOM_PROMPT_BEGIN" -v end="$CUSTOM_PROMPT_END" '
-            {
-                line = $0
-                sub(/\r$/, "", line)
-                if (line == begin) {
-                    begin_count++
-                    if (begin_count == 1) begin_line = NR
-                }
-                if (line == end) {
-                    end_count++
-                    if (end_count == 1) end_line = NR
-                }
-            }
-            END {
-                printf "%d %d %d %d\n", begin_count + 0, end_count + 0, begin_line + 0, end_line + 0
-            }
-        ' "$target"); then
-            warn "Cannot inspect custom prompt markers in $target"
+    local target_exists=false
+    local snapshot=""
+    local mode=""
+    local begin_count=0 end_count=0 begin_offset=0 end_offset=0 block_end=0 no_final_newline_count=0
+    local block_start=0
+
+    if [[ -f "$target" ]]; then
+        target_exists=true
+        mode=$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)
+        if ! snapshot=$(mktemp "${target}.snapshot.XXXXXX") || ! cp "$target" "$snapshot"; then
+            [[ -n "$snapshot" ]] && rm -f "$snapshot"
+            warn "Cannot snapshot $requested_target"
             return 1
         fi
-        read -r begin_count end_count begin_line end_line <<< "$marker_info"
+
+        local marker_info
+        if ! marker_info=$(get_custom_prompt_block_bounds "$snapshot"); then
+            rm -f "$snapshot"
+            warn "Cannot inspect custom prompt markers in $requested_target"
+            return 1
+        fi
+        read -r begin_count end_count begin_offset end_offset block_end no_final_newline_count <<< "$marker_info"
 
         if [[ "$begin_count" -ne 0 || "$end_count" -ne 0 ]]; then
-            if [[ "$begin_count" -ne 1 || "$end_count" -ne 1 || "$begin_line" -ge "$end_line" ]]; then
-                warn "Malformed custom prompt markers in $target; leaving file unchanged"
+            if [[ "$begin_count" -ne 1 || "$end_count" -ne 1 \
+                || "$begin_offset" -ge "$end_offset" || "$no_final_newline_count" -gt 1 ]]; then
+                rm -f "$snapshot"
+                warn "Malformed custom prompt markers in $requested_target; leaving file unchanged"
+                return 1
+            fi
+            if ! block_start=$(get_custom_prompt_block_start "$snapshot" "$begin_offset" "$no_final_newline_count"); then
+                rm -f "$snapshot"
+                warn "Malformed custom prompt metadata in $requested_target; leaving file unchanged"
                 return 1
             fi
         fi
     fi
 
-    # Build the full replacement in a temp file; only mv on success.
     local tmpfile
     if ! tmpfile=$(mktemp "${target}.tmp.XXXXXX"); then
-        warn "Cannot create temporary file for $target"
+        [[ -n "$snapshot" ]] && rm -f "$snapshot"
+        warn "Cannot create temporary file for $requested_target"
         return 1
     fi
 
-    # Shellcheck: keep cleanup on every early return below.
-    if [[ -f "$target" ]]; then
-        # Copy user content, omitting any existing valid managed block (+ one
-        # adjacent separator blank). Target stays untouched until final mv.
-        # Strip trailing CR so CRLF CLAUDE.md files match markers reliably.
-        if ! awk -v first="$begin_line" -v last="$end_line" -v has_block=$(( begin_count == 1 ? 1 : 0 )) '
-            {
-                line = $0
-                sub(/\r$/, "", line)
-                lines[NR] = line
-            }
-            END {
-                if (has_block) {
-                    remove_before = (first > 1 && lines[first - 1] == "")
-                    remove_after = (!remove_before && last < NR && lines[last + 1] == "")
-                    for (i = 1; i <= NR; i++) {
-                        if (i >= first && i <= last) continue
-                        if (remove_before && i == first - 1) continue
-                        if (remove_after && i == last + 1) continue
-                        print lines[i]
-                    }
-                } else {
-                    for (i = 1; i <= NR; i++) print lines[i]
-                }
-            }
-        ' "$target" > "$tmpfile"; then
-            rm -f "$tmpfile"
-            warn "Cannot rewrite $target"
+    local prefix_size=0
+    if $target_exists; then
+        if [[ "$begin_count" -eq 1 ]]; then
+            prefix_size="$block_start"
+        else
+            prefix_size=$(wc -c < "$snapshot")
+            prefix_size="${prefix_size//[[:space:]]/}"
+        fi
+        if ! LC_ALL=C head -c "$prefix_size" "$snapshot" > "$tmpfile"; then
+            cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+            warn "Cannot rewrite $requested_target"
             return 1
         fi
     else
         : > "$tmpfile" || {
             rm -f "$tmpfile"
-            warn "Cannot create temporary file for $target"
+            warn "Cannot create temporary file for $requested_target"
             return 1
         }
     fi
 
-    # Ensure a blank-line separator before the managed block when prior content exists.
-    if [[ -s "$tmpfile" ]]; then
+    local inserted_separator=false
+    if [[ "$prefix_size" -gt 0 ]]; then
         local last_byte
         last_byte=$(LC_ALL=C tail -c 1 "$tmpfile" | od -An -t x1 | tr -d '[:space:]')
-        if [[ "$last_byte" == "0a" ]]; then
-            # Ends with newline; add one more blank line if last line is non-empty.
-            local last_line
-            last_line=$(tail -n 1 "$tmpfile")
-            if [[ -n "$last_line" ]]; then
-                if ! printf '\n' >> "$tmpfile"; then
-                    rm -f "$tmpfile"
-                    warn "Cannot write custom prompt block to $target"
-                    return 1
-                fi
-            fi
-        else
-            if ! printf '\n\n' >> "$tmpfile"; then
-                rm -f "$tmpfile"
-                warn "Cannot write custom prompt block to $target"
+        if [[ "$last_byte" != "0a" ]]; then
+            if ! printf '\n' >> "$tmpfile"; then
+                cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+                warn "Cannot write custom prompt block to $requested_target"
                 return 1
             fi
+            inserted_separator=true
         fi
     fi
 
     if ! printf '%s\n' "$CUSTOM_PROMPT_BEGIN" >> "$tmpfile"; then
-        rm -f "$tmpfile"
-        warn "Cannot write custom prompt block to $target"
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Cannot write custom prompt block to $requested_target"
         return 1
     fi
+    if $inserted_separator; then
+        if ! printf '%s\n' "$CUSTOM_PROMPT_NO_FINAL_NEWLINE" >> "$tmpfile"; then
+            cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+            warn "Cannot write custom prompt block to $requested_target"
+            return 1
+        fi
+    fi
     if ! cat "$prompt_source" >> "$tmpfile"; then
-        rm -f "$tmpfile"
-        warn "Cannot write custom prompt block to $target"
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Cannot write custom prompt block to $requested_target"
         return 1
     fi
 
@@ -610,28 +777,62 @@ inject_custom_prompt_block() {
     source_last_byte=$(LC_ALL=C tail -c 1 "$prompt_source" | od -An -t x1 | tr -d '[:space:]')
     if [[ "$source_last_byte" != "0a" ]]; then
         if ! printf '\n' >> "$tmpfile"; then
-            rm -f "$tmpfile"
-            warn "Cannot write custom prompt block to $target"
+            cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+            warn "Cannot write custom prompt block to $requested_target"
             return 1
         fi
     fi
     if ! printf '%s\n' "$CUSTOM_PROMPT_END" >> "$tmpfile"; then
-        rm -f "$tmpfile"
-        warn "Cannot write custom prompt block to $target"
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Cannot write custom prompt block to $requested_target"
         return 1
+    fi
+
+    if $target_exists && [[ "$begin_count" -eq 1 ]]; then
+        if ! LC_ALL=C tail -c "+$((block_end + 1))" "$snapshot" >> "$tmpfile"; then
+            cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+            warn "Cannot rewrite $requested_target"
+            return 1
+        fi
+    fi
+
+    if $target_exists && cmp -s "$snapshot" "$tmpfile"; then
+        if ! cmp -s "$target" "$snapshot"; then
+            cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+            warn "$requested_target changed during prompt synchronization; retry the switch"
+            return 1
+        fi
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        return 0
     fi
 
     if [[ -n "$mode" ]] && ! chmod "$mode" "$tmpfile"; then
-        rm -f "$tmpfile"
-        warn "Cannot preserve permissions for $target"
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Cannot preserve permissions for $requested_target"
+        return 1
+    fi
+    if $target_exists && ! cmp -s "$target" "$snapshot"; then
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "$requested_target changed during prompt synchronization; retry the switch"
+        return 1
+    fi
+    if $target_exists && ! backup_claude_md "$target" "$snapshot" "$mode"; then
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Leaving $requested_target unchanged because its backup failed"
+        return 1
+    fi
+    if $target_exists && ! cmp -s "$target" "$snapshot"; then
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "$requested_target changed during backup; leaving it unchanged"
         return 1
     fi
     if ! mv "$tmpfile" "$target"; then
-        rm -f "$tmpfile"
-        warn "Cannot replace $target"
+        cleanup_custom_prompt_files "$snapshot" "$tmpfile"
+        warn "Cannot replace $requested_target"
         return 1
     fi
 
+    [[ -n "$snapshot" ]] && rm -f "$snapshot"
     return 0
 }
 
@@ -641,9 +842,13 @@ remove_custom_prompt_for_current_scope() {
 
     if remove_custom_prompt_block "$target"; then
         info "Removed custom prompt from $target"
+        return 0
+    else
+        local status=$?
+        # Missing file/block already represents the desired disabled state.
+        [[ "$status" -eq 1 ]] && return 0
+        return "$status"
     fi
-
-    return 0
 }
 
 # Best-effort download of the runtime prompt when missing.
@@ -675,12 +880,12 @@ sync_custom_prompt() {
         ensure_custom_prompt_file || true
         if inject_custom_prompt_block "$target" "$CUSTOM_PROMPT_FILE"; then
             info "Applied custom prompt to $target"
+            return 0
         fi
-    else
-        remove_custom_prompt_for_current_scope
+        return 1
     fi
 
-    return 0
+    remove_custom_prompt_for_current_scope
 }
 
 # Validate a single completed section: required-keys + Foundry OR-rule.
@@ -1055,8 +1260,12 @@ cmd_switch() {
             ;;
     esac
 
-    # Keep the current scope's CLAUDE.md in sync with this profile (best-effort).
-    sync_custom_prompt "$profile"
+    # Keep the current scope's CLAUDE.md in sync with this profile. Provider
+    # settings still switch on failure, but the mismatch must be visible.
+    local prompt_sync_ok=true
+    if ! sync_custom_prompt "$profile"; then
+        prompt_sync_ok=false
+    fi
 
     # Save active profile
     set_active_profile "$profile"
@@ -1077,6 +1286,9 @@ cmd_switch() {
     local scope_label="global"
     [[ -n "${CCS_PROJECT_ROOT:-}" ]] && scope_label="project"
 
+    if ! $prompt_sync_ok; then
+        warn "Profile settings switched, but $scope_label CLAUDE.md prompt synchronization failed"
+    fi
     success "Switched to profile: $profile ($(cyan "$type")) [$(cyan "$scope_label")]"
     if [[ "$type" == "foundry" ]]; then
         local display_url
@@ -1254,7 +1466,9 @@ cmd_clear() {
     if [[ ! -f "$settings_path" ]]; then
         warn "No project settings file found: $settings_path"
         rm -f "$state_file"
-        remove_custom_prompt_for_current_scope
+        if ! remove_custom_prompt_for_current_scope; then
+            warn "Project settings cleared, but project CLAUDE.md prompt synchronization failed"
+        fi
         success "Removed project state file (nothing else to do)"
         return 0
     fi
@@ -1264,7 +1478,9 @@ cmd_clear() {
     if [[ -z "$env_keys" ]]; then
         warn "No provider env keys in project settings"
         rm -f "$state_file"
-        remove_custom_prompt_for_current_scope
+        if ! remove_custom_prompt_for_current_scope; then
+            warn "Project settings cleared, but project CLAUDE.md prompt synchronization failed"
+        fi
         success "Removed project state file (nothing else to do)"
         return 0
     fi
@@ -1283,7 +1499,9 @@ cmd_clear() {
     tmpfile=$(mktemp)
     jq 'del(.env)' "$settings_path" > "$tmpfile" && mv "$tmpfile" "$settings_path"
     rm -f "$state_file"
-    remove_custom_prompt_for_current_scope
+    if ! remove_custom_prompt_for_current_scope; then
+        warn "Project settings cleared, but project CLAUDE.md prompt synchronization failed"
+    fi
     success "Cleared project provider config. This project now uses the global profile."
 }
 

@@ -105,19 +105,22 @@ Notes:
 
 ```markdown
 <!-- CCS-CUSTOM-PROMPT:BEGIN -->
+<!-- CCS-CUSTOM-PROMPT:ORIGINAL-EOF:NO-NL -->
 <contents of gpt-custom-prompt.md>
 <!-- CCS-CUSTOM-PROMPT:END -->
 ```
 
-Placement:
+Placement and ownership:
 
-- Append at end of file.
-- If file is non-empty and does not already end with a newline, add one before the block.
-- Prefer a single blank line separator between pre-existing user content and the managed block when the file is non-empty.
+- BEGIN and END are recognized only when each occupies a complete line (LF or CRLF). Literal marker strings inside prose or code examples are user content.
+- Append at end of file when no block exists; replace a valid existing block in place.
+- Do not remove or normalize adjacent whitespace.
+- If non-empty user content has no final newline, insert one so BEGIN remains a standalone Markdown line and include the `ORIGINAL-EOF:NO-NL` metadata inside the managed block. Removal owns and removes only that inserted LF, restoring the exact original bytes.
 
 Idempotency:
 
-- Inject always runs remove-then-append so GPT→GPT re-switch never duplicates the block.
+- Re-switch never duplicates the block.
+- If the generated file is byte-identical, injection is a no-op: no replacement and no backup slot consumed.
 - Content inside markers is fully owned by CCS; user edits inside the block are overwritten on next inject.
 
 ## Core helpers (`ccs.sh`)
@@ -129,6 +132,8 @@ readonly CUSTOM_PROMPT_DIR="${CCS_DIR}/custom-model"
 readonly CUSTOM_PROMPT_FILE="${CUSTOM_PROMPT_DIR}/gpt-custom-prompt.md"
 readonly CUSTOM_PROMPT_BEGIN='<!-- CCS-CUSTOM-PROMPT:BEGIN -->'
 readonly CUSTOM_PROMPT_END='<!-- CCS-CUSTOM-PROMPT:END -->'
+readonly CUSTOM_PROMPT_NO_FINAL_NEWLINE='<!-- CCS-CUSTOM-PROMPT:ORIGINAL-EOF:NO-NL -->'
+readonly CUSTOM_PROMPT_BACKUP_LIMIT=50
 ```
 
 ### `is_custom_prompt_enabled(profile) → status`
@@ -142,21 +147,21 @@ As above.
 
 ### `remove_custom_prompt_block(file)`
 
-- Missing file → success no-op.
-- No BEGIN marker → success no-op.
-- BEGIN without matching END (or END before BEGIN) → `warn`, leave file unchanged, return non-zero.
-- Otherwise rewrite file without the managed region (inclusive of markers).
-- Collapse at most one extra blank line left solely by removal; do not strip user blank lines aggressively.
-- Echo whether a removal occurred (for UX) via return code or a side channel consistent with existing helpers (prefer stdout flag only if needed; default: return 0 always on clean no-op/remove, non-zero only on malformed markers).
+- Missing file or no exact-line markers → clean no-op (`1`, used internally to suppress UX noise).
+- Duplicate, missing, reversed, or malformed markers/metadata → `warn`, leave file unchanged, return failure (`2`).
+- Snapshot the resolved target (following a `CLAUDE.md` symlink without replacing the symlink), inspect byte offsets, and build the replacement from exact prefix/suffix byte ranges.
+- Remove only the managed range. Remove the preceding LF only when the internal `ORIGINAL-EOF:NO-NL` metadata proves CCS inserted it.
+- Never collapse adjacent blank lines or normalize LF/CRLF/final-newline state.
+- Before replacement, publish an atomic recovery entry and verify the target still matches the snapshot.
 
 ### `inject_custom_prompt_block(file, prompt_src)`
 
-1. If `prompt_src` missing or empty → `warn`, return non-zero (do not create empty managed block).
-2. If prompt body contains the BEGIN or END marker strings → `warn`, skip inject, return non-zero.
-3. `remove_custom_prompt_block` first.
-4. `mkdir -p "$(dirname "$file")"` as needed.
-5. Append separator + BEGIN + prompt body + END.
-6. Preserve user content outside markers.
+1. If `prompt_src` is missing/empty or contains a reserved marker → `warn`, return non-zero.
+2. Resolve symlinks to the referent, snapshot an existing target once, and validate exact-line markers.
+3. Build a same-directory temporary replacement from exact byte ranges; replace an existing valid block in place or append when absent.
+4. Insert an owned LF + `ORIGINAL-EOF:NO-NL` metadata only when required to keep BEGIN on a standalone line.
+5. If the result equals the snapshot, return success without backup or replacement.
+6. Otherwise publish a pre-mutation recovery entry, re-check the snapshot, preserve mode, then atomically `mv` the replacement.
 
 ### `sync_custom_prompt(profile)`
 
@@ -171,7 +176,7 @@ else:
   if no block: silent
 ```
 
-Failure of inject/remove must **not** abort `cmd_switch` after settings were already written. Call as best-effort (`sync_custom_prompt ... || true` or internal soft-fail).
+Failure of inject/remove must **not** roll back or abort `cmd_switch` after settings were already written, but it must propagate to the caller so the final switch output explicitly warns that provider settings changed while `CLAUDE.md` synchronization did not.
 
 ## Hook points
 
@@ -214,23 +219,19 @@ Always overwrite local prompt on update (repo is source of truth). Document that
 - **Do not** automatically edit `~/.claude/CLAUDE.md` or project `CLAUDE.md`.
 - Document: switch to a non-custom-prompt profile (or manually delete the marker block) before uninstall if cleanup is desired.
 
-## Multline edit strategy
+## Multiline edit strategy
 
-Prefer **awk + temp file + `mv`**, matching the repo’s existing “rewrite via temp” style (`jq` settings updates).
+Use **byte-offset inspection + same-directory snapshot/temp file + `mv`**.
 
-- No new hard dependency (awk is expected on Linux/macOS/WSL targets CCS already supports).
-- Avoid embedding the full prompt as a bash heredoc inside `ccs.sh`.
+- `awk` inspects exact marker lines and reports byte offsets under `LC_ALL=C`; it never prints/reconstructs user lines.
+- Buffered `head -c` / `tail -c +N` copy exact preserved ranges, avoiding line-ending normalization and byte-at-a-time I/O.
+- Snapshot once, build from that immutable copy, compare the live target before and after backup, then atomically replace it.
+- Follow symlinks to their referent so `mv` does not replace the symlink object.
+- Avoid embedding the full prompt as a bash heredoc inside `ccs.sh`; append the runtime prompt file with `cat`.
 
-Pseudo-remove (illustrative):
+### Recovery entries
 
-```awk
-BEGIN { skip=0 }
-$0 == BEGIN { skip=1; next }
-$0 == END { skip=0; next }
-!skip { print }
-```
-
-Inject: write user content (post-remove) then append markers + `cat` of prompt file.
+Before each non-no-op mutation of an existing file, build a private hidden temporary directory under `~/.ccs/backups/claude-md/`, write `CLAUDE.md`, `target.path`, and `mode`, then rename it to `backup.<unique-id>/`. Only published entries participate in recovery/retention. Keep the 50 most recent entries globally.
 
 ## UX copy
 
@@ -251,11 +252,15 @@ Include the applied/removed line near the existing switch success summary.
 |------|----------|
 | Target file missing + inject | Create file with only the managed block |
 | Target file missing + remove | No-op |
-| Malformed markers | Warn; do not rewrite |
-| Prompt contains marker text | Warn; skip inject |
+| Malformed exact-line markers or metadata | Warn; do not rewrite |
+| Marker strings inside prose/code | User content; ignored unless each marker is a complete line |
+| Prompt contains reserved marker text | Warn; skip inject |
+| Existing content has no final newline | Insert owned LF + metadata; restore exact EOF state on removal |
+| `CLAUDE.md` is a symlink | Mutate referent; preserve symlink |
+| Backup cannot be published | Leave `CLAUDE.md` unchanged and surface synchronization failure in switch output |
 | `CUSTOM_PROMPT=true` | Treated as off |
 | GPT project then global non-GPT | Only global file cleaned; project file may still hold block (v1 OK) |
-| Concurrent editor on CLAUDE.md | Best-effort write; no file lock (same class of risk as settings.json) |
+| Concurrent editor on CLAUDE.md | Snapshot and compare before/after backup; abort if a change is detected. A tiny final compare-to-rename race remains because editors do not share a lock. |
 
 ## Files to change
 
@@ -264,7 +269,8 @@ Include the applied/removed line near the existing switch success summary.
 | `ccs.sh` | Constants, helpers, `cmd_switch` / `cmd_clear` hooks, `cmd_update` download, `ALL_VALID_KEYS`, optional status line |
 | `install.sh` | Create dir + download prompt file |
 | `provider.conf.example` | Commented `CUSTOM_PROMPT=1` |
-| `README.md` | Document feature, key, paths, markers, update overwrite policy |
+| `README.md` | Document feature, key, paths, markers, byte preservation, recovery entries, update overwrite policy |
+| `tests/custom_prompt_preservation_test.sh` | Regression coverage for LF/CRLF/EOF bytes, literal markers, no-op, backups, symlinks, and failure propagation |
 | `VERSION` | Bump (also keep `ccs.sh` / `install.sh` version sources consistent with project practice) |
 | `custom-model/gpt-custom-prompt.md` | Rename from `gpt-custom-promt.md` |
 | `custom-model/specs.txt` | Optional pointer to this design doc |
@@ -272,11 +278,15 @@ Include the applied/removed line near the existing switch success summary.
 ## Manual verification checklist
 
 1. Profile with `CUSTOM_PROMPT=1`, global `ccs <profile>` → `~/.claude/CLAUDE.md` contains exactly one marked block with prompt content.
-2. Switch to profile without the flag → block removed from global file; user content outside markers preserved.
-3. Re-switch between two `CUSTOM_PROMPT=1` profiles → still exactly one block; content matches current prompt file.
-4. `ccs -p <gpt-profile>` → only `<project>/CLAUDE.md` changes; global file untouched.
-5. `ccs -p clear` → managed block removed from project `CLAUDE.md`.
-6. Delete/rename runtime prompt file, switch enabled profile → settings still switch; warn about missing prompt.
+2. Switch to profile without the flag → block removed; compare original and restored bytes for LF, CRLF, trailing blank lines, and missing final newline.
+3. Re-switch an unchanged enabled profile → still exactly one block, unchanged inode, and no additional recovery entry.
+4. Literal marker strings in prose/code remain untouched.
+5. Existing content without a final newline keeps valid Markdown structure while active and returns byte-exactly after removal.
+6. A symlinked `CLAUDE.md` remains a symlink and its referent round-trips exactly.
+7. `ccs -p <gpt-profile>` → only `<project>/CLAUDE.md` changes; global file untouched.
+8. `ccs -p clear` → managed block removed from project `CLAUDE.md`.
+9. A failed recovery publication leaves `CLAUDE.md` unchanged and prints a final synchronization warning while provider settings still switch.
+10. Delete/rename runtime prompt file, switch enabled profile → settings still switch; warn about missing prompt.
 7. `validate_conf` / profile load does not error on `CUSTOM_PROMPT` key.
 8. Install path creates `~/.ccs/custom-model/gpt-custom-prompt.md`; update overwrites it.
 

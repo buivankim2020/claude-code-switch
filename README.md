@@ -158,8 +158,13 @@ ccs -p current    # → project active profile
 ├── ccs-completion.bash     # Bash tab completion
 ├── ccs-completion.zsh      # Zsh tab completion
 ├── .update_check           # Auto-update check cache
-└── backups/                # settings.json backups
-    └── settings.backup.{timestamp}.json
+└── backups/
+    ├── settings.backup.{timestamp}.json
+    └── claude-md/          # Atomic pre-mutation CLAUDE.md recovery entries
+        └── backup.<unique-id>/
+            ├── CLAUDE.md
+            ├── target.path
+            └── mode
 ```
 
 ### Profile format (`provider.conf`)
@@ -236,6 +241,8 @@ CCS does not infer GPT from the profile or model name. Only the exact value `CUS
 - Project switch (`ccs -p <profile>`) manages `<project-root>/CLAUDE.md`.
 - Switching to a profile without `CUSTOM_PROMPT=1` removes the managed block from the current scope only.
 - The managed content is wrapped by `<!-- CCS-CUSTOM-PROMPT:BEGIN -->` and `<!-- CCS-CUSTOM-PROMPT:END -->`. Content inside those markers is owned by CCS and is replaced on the next enabled switch.
+- CCS preserves every byte outside the managed block, including CRLF line endings, trailing blank lines, and files without a final newline. It does not remove adjacent whitespace that may belong to you.
+- Before changing an existing `CLAUDE.md`, CCS atomically publishes a recovery entry under `~/.ccs/backups/claude-md/backup.<unique-id>/`. It records the exact file bytes, original path, and mode, and keeps the 50 most recent entries globally. Restore a selected `CLAUDE.md` with `cp`, then apply the recorded `mode` with `chmod` if needed.
 - The runtime prompt is `~/.ccs/custom-model/gpt-custom-prompt.md`. Install and update copy it from this repository and updates overwrite local edits.
 - Uninstall does not edit user or project `CLAUDE.md` files. Switch to a non-custom-prompt profile first, or manually remove the marked block before uninstalling.
 

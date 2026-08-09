@@ -3,7 +3,7 @@
 # CCS Install Script
 # Install or uninstall Claude Code Switch
 #
-# Version: 1.4.7
+# Version: 1.4.8
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/user/claude-code-switch/main/install.sh | bash
