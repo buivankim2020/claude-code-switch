@@ -29,6 +29,25 @@ source "${TEST_ROOT}/ccs-under-test.sh"
 prompt="${TEST_ROOT}/prompt.md"
 printf 'managed prompt\nsecond line\n' > "$prompt"
 
+canonical_prompt="${REPO_ROOT}/custom-model/gpt-custom-prompt.md"
+python3 - "$canonical_prompt" <<'PY'
+from pathlib import Path
+import sys
+
+prompt_text = Path(sys.argv[1]).read_text()
+expected = """## Activation indicator
+
+On the first user-facing assistant response of each new conversation, begin with exactly:
+
+🟢 CCS custom prompt active
+
+Show this indicator only once per conversation.
+"""
+if prompt_text.count(expected) != 1:
+    raise SystemExit('FAIL: canonical prompt must contain exactly one activation indicator instruction')
+print('PASS: activation-indicator')
+PY
+
 assert_round_trip() {
     local name="$1"
     local target="${TEST_ROOT}/${name}.md"

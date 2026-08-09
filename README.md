@@ -244,6 +244,7 @@ CCS does not infer GPT from the profile or model name. Only the exact value `CUS
 - CCS preserves every byte outside the managed block, including CRLF line endings, trailing blank lines, and files without a final newline. It does not remove adjacent whitespace that may belong to you.
 - Before changing an existing `CLAUDE.md`, CCS atomically publishes a recovery entry under `~/.ccs/backups/claude-md/backup.<unique-id>/`. It records the exact file bytes, original path, and mode, and keeps the 50 most recent entries globally. Restore a selected `CLAUDE.md` with `cp`, then apply the recorded `mode` with `chmod` if needed.
 - The runtime prompt is `~/.ccs/custom-model/gpt-custom-prompt.md`. Install and update copy it from this repository and updates overwrite local edits.
+- In each new conversation that loads the custom prompt, the first assistant response begins with `🟢 CCS custom prompt active` and shows it only once. After switching profiles, start a new conversation or run `/clear` so Claude Code reloads `CLAUDE.md`.
 - Uninstall does not edit user or project `CLAUDE.md` files. Switch to a non-custom-prompt profile first, or manually remove the marked block before uninstalling.
 
 If the runtime prompt file is missing, CCS warns but still completes the provider switch.
