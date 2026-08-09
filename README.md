@@ -153,6 +153,8 @@ ccs -p current    # → project active profile
 ├── config.env              # CCS state (global active profile)
 ├── projects/               # Per-project state files
 │   └── <md5_hash>.env      # Active profile for a specific project
+├── custom-model/
+│   └── gpt-custom-prompt.md  # Canonical runtime copy (overwritten on update)
 ├── ccs-completion.bash     # Bash tab completion
 ├── ccs-completion.zsh      # Zsh tab completion
 ├── .update_check           # Auto-update check cache
@@ -214,16 +216,42 @@ stale configuration.
 | anthropic  | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_DEFAULT_{HAIKU,OPUS,SONNET}_MODEL`                       | `CLAUDE_CODE_USE_FOUNDRY`, `ANTHROPIC_FOUNDRY_*` |
 | foundry    | `CLAUDE_CODE_USE_FOUNDRY=1`, `ANTHROPIC_FOUNDRY_{RESOURCE\|BASE_URL}`, `ANTHROPIC_FOUNDRY_API_KEY`, 3 model keys | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` |
 
+### Optional custom prompt per profile
+
+Set `CUSTOM_PROMPT=1` in a profile to let CCS manage the bundled custom prompt for that profile:
+
+```ini
+[gpt-standard]
+ANTHROPIC_AUTH_TOKEN=sk-your-key-here
+ANTHROPIC_BASE_URL=https://api.example.com/v1
+ANTHROPIC_DEFAULT_HAIKU_MODEL=gpt-latest
+ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-latest
+ANTHROPIC_DEFAULT_SONNET_MODEL=gpt-latest
+CUSTOM_PROMPT=1
+```
+
+CCS does not infer GPT from the profile or model name. Only the exact value `CUSTOM_PROMPT=1` enables this feature; the default is off.
+
+- Global switch (`ccs <profile>`) manages `~/.claude/CLAUDE.md`.
+- Project switch (`ccs -p <profile>`) manages `<project-root>/CLAUDE.md`.
+- Switching to a profile without `CUSTOM_PROMPT=1` removes the managed block from the current scope only.
+- The managed content is wrapped by `<!-- CCS-CUSTOM-PROMPT:BEGIN -->` and `<!-- CCS-CUSTOM-PROMPT:END -->`. Content inside those markers is owned by CCS and is replaced on the next enabled switch.
+- The runtime prompt is `~/.ccs/custom-model/gpt-custom-prompt.md`. Install and update copy it from this repository and updates overwrite local edits.
+- Uninstall does not edit user or project `CLAUDE.md` files. Switch to a non-custom-prompt profile first, or manually remove the marked block before uninstalling.
+
+If the runtime prompt file is missing, CCS warns but still completes the provider switch.
+
 ## How It Works
 
 When you run `ccs <profile>`:
 
-1. Reads the profile from `provider.conf` and determines its `PROVIDER_TYPE`
+1. Reads the profile from `provider.conf` and determines its `PROVIDER_TYPE` and optional `CUSTOM_PROMPT`
 2. Backs up the current settings file to `~/.ccs/backups/`
 3. Cleans up old backups (keeps the 10 most recent)
 4. Updates **only** the managed keys in the settings file using `jq`, clearing any stale keys left over from a different provider type
-5. Saves the active profile to the state file (`config.env` for global, `projects/<hash>.env` for project)
-6. Prompts to reload VSCode to apply changes
+5. Applies or removes the managed custom prompt in the current scope's `CLAUDE.md` (best-effort)
+6. Saves the active profile to the state file (`config.env` for global, `projects/<hash>.env` for project)
+7. Prompts to reload VSCode to apply changes
 
 With `ccs -p <profile>` (project scope):
 
@@ -231,6 +259,7 @@ With `ccs -p <profile>` (project scope):
 2. Targets `<project_root>/.claude/settings.local.json` instead of the global file
 3. Tracks the active profile independently per project in `~/.ccs/projects/<md5_hash>.env`
 4. Preserves existing project-level settings (permissions, hooks, etc.) — only the `.env` block is modified
+5. Manages `<project_root>/CLAUDE.md` for the custom prompt (not the global file)
 
 ## Azure Foundry setup
 

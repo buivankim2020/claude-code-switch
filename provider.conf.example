@@ -8,6 +8,11 @@
 #
 # PROVIDER_TYPE (optional, default=anthropic) selects the shape of the profile.
 #
+# Optional per-profile behavior:
+#   CUSTOM_PROMPT=1                    Inject the CCS-managed custom prompt into
+#                                      CLAUDE.md when this profile is active.
+#                                      Missing or any value other than 1 = off.
+#
 # --- Type: anthropic (default) ---
 # Required keys:
 #   ANTHROPIC_AUTH_TOKEN

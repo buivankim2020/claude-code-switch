@@ -3,6 +3,8 @@
 # CCS Install Script
 # Install or uninstall Claude Code Switch
 #
+# Version: 1.4.7
+#
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/user/claude-code-switch/main/install.sh | bash
 #   bash install.sh --uninstall
@@ -144,6 +146,7 @@ install_ccs() {
     # Create directories
     mkdir -p "$CCS_DIR"
     mkdir -p "${CCS_DIR}/backups"
+    mkdir -p "${CCS_DIR}/custom-model"
 
     info "Downloading CCS..."
 
@@ -153,6 +156,14 @@ install_ccs() {
     download_file "provider.conf.example" "${CCS_DIR}/provider.conf.example"
     download_file "ccs-completion.bash" "${CCS_DIR}/ccs-completion.bash"
     download_file "ccs-completion.zsh" "${CCS_DIR}/ccs-completion.zsh"
+
+    # Optional custom prompt body (repo is source of truth; non-fatal if missing)
+    local prompt_dest="${CCS_DIR}/custom-model/gpt-custom-prompt.md"
+    if ! download_file "custom-model/gpt-custom-prompt.md" "$prompt_dest" \
+        || [[ ! -s "$prompt_dest" ]]; then
+        rm -f "$prompt_dest"
+        warn "CCS installed without the optional custom prompt file"
+    fi
 
     # Make executable
     chmod +x "${CCS_DIR}/ccs.sh"

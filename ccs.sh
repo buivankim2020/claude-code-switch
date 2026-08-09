@@ -3,7 +3,7 @@
 # CCS - Claude Code Switch
 # Quick switch between multiple AI provider profiles for Claude Code
 #
-# Version: 1.0.6
+# Version: 1.4.7
 # License: MIT
 
 set -euo pipefail
@@ -58,12 +58,16 @@ readonly PROVIDER_EXAMPLE="${CCS_DIR}/provider.conf.example"
 readonly BACKUP_DIR="${CCS_DIR}/backups"
 readonly UPDATE_CHECK_FILE="${CCS_DIR}/.update_check"
 readonly REPO_URL="https://raw.githubusercontent.com/buivankim2020/claude-code-switch/main"
+readonly CUSTOM_PROMPT_DIR="${CCS_DIR}/custom-model"
+readonly CUSTOM_PROMPT_FILE="${CUSTOM_PROMPT_DIR}/gpt-custom-prompt.md"
+readonly CUSTOM_PROMPT_BEGIN='<!-- CCS-CUSTOM-PROMPT:BEGIN -->'
+readonly CUSTOM_PROMPT_END='<!-- CCS-CUSTOM-PROMPT:END -->'
 
 # Known provider types
 readonly KNOWN_TYPES="anthropic foundry"
 
 # All valid keys across every provider type (used for typo detection)
-readonly ALL_VALID_KEYS="PROVIDER_TYPE \
+readonly ALL_VALID_KEYS="PROVIDER_TYPE CUSTOM_PROMPT \
 ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL \
 ANTHROPIC_FOUNDRY_RESOURCE ANTHROPIC_FOUNDRY_BASE_URL ANTHROPIC_FOUNDRY_API_KEY \
 ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL"
@@ -193,6 +197,14 @@ get_settings_path() {
             echo "${HOME}/.claude/settings.json"
             ;;
     esac
+}
+
+get_claude_md_path() {
+    if [[ -n "${CCS_PROJECT_ROOT:-}" ]]; then
+        echo "${CCS_PROJECT_ROOT}/CLAUDE.md"
+    else
+        echo "${HOME}/.claude/CLAUDE.md"
+    fi
 }
 
 #==============================================================================
@@ -348,6 +360,327 @@ read_profile() {
             echo "${key}=${value}"
         fi
     done < "$PROVIDER_CONF"
+}
+
+is_custom_prompt_enabled() {
+    local profile="$1"
+    local config
+    local custom_prompt=""
+
+    if ! config=$(read_profile "$profile"); then
+        return 1
+    fi
+
+    while IFS='=' read -r key value; do
+        if [[ "$key" == "CUSTOM_PROMPT" ]]; then
+            custom_prompt="$value"
+        fi
+    done <<< "$config"
+
+    [[ "$custom_prompt" == "1" ]]
+}
+
+remove_custom_prompt_block() {
+    local target="$1"
+    if [[ ! -f "$target" ]]; then
+        return 1
+    fi
+
+    local marker_info
+    if ! marker_info=$(awk -v begin="$CUSTOM_PROMPT_BEGIN" -v end="$CUSTOM_PROMPT_END" '
+        {
+            line = $0
+            sub(/\r$/, "", line)
+            lines[NR] = line
+            if (line == begin) {
+                begin_count++
+                if (begin_count == 1) begin_line = NR
+            }
+            if (line == end) {
+                end_count++
+                if (end_count == 1) end_line = NR
+            }
+        }
+        END {
+            printf "%d %d %d %d\n", begin_count + 0, end_count + 0, begin_line + 0, end_line + 0
+        }
+    ' "$target"); then
+        warn "Cannot inspect custom prompt markers in $target"
+        return 2
+    fi
+
+    local begin_count end_count begin_line end_line
+    read -r begin_count end_count begin_line end_line <<< "$marker_info"
+
+    if [[ "$begin_count" -eq 0 && "$end_count" -eq 0 ]]; then
+        return 1
+    fi
+    if [[ "$begin_count" -ne 1 || "$end_count" -ne 1 || "$begin_line" -ge "$end_line" ]]; then
+        warn "Malformed custom prompt markers in $target; leaving file unchanged"
+        return 2
+    fi
+
+    local mode=""
+    mode=$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)
+
+    local tmpfile
+    if ! tmpfile=$(mktemp "${target}.tmp.XXXXXX"); then
+        warn "Cannot create temporary file for $target"
+        return 2
+    fi
+
+    # Rewrite with CR stripped from lines so CRLF markers match consistently.
+    if ! awk -v first="$begin_line" -v last="$end_line" '
+        {
+            line = $0
+            sub(/\r$/, "", line)
+            lines[NR] = line
+        }
+        END {
+            remove_before = (first > 1 && lines[first - 1] == "")
+            remove_after = (!remove_before && last < NR && lines[last + 1] == "")
+            for (i = 1; i <= NR; i++) {
+                if (i >= first && i <= last) continue
+                if (remove_before && i == first - 1) continue
+                if (remove_after && i == last + 1) continue
+                print lines[i]
+            }
+        }
+    ' "$target" > "$tmpfile"; then
+        rm -f "$tmpfile"
+        warn "Cannot rewrite $target"
+        return 2
+    fi
+
+    if [[ -n "$mode" ]] && ! chmod "$mode" "$tmpfile"; then
+        rm -f "$tmpfile"
+        warn "Cannot preserve permissions for $target"
+        return 2
+    fi
+    if ! mv "$tmpfile" "$target"; then
+        rm -f "$tmpfile"
+        warn "Cannot replace $target"
+        return 2
+    fi
+
+    return 0
+}
+
+inject_custom_prompt_block() {
+    local target="$1"
+    local prompt_source="$2"
+
+    # Validate source before touching the target.
+    if [[ ! -f "$prompt_source" || ! -s "$prompt_source" ]]; then
+        warn "Custom prompt source is missing or empty: $prompt_source"
+        return 1
+    fi
+    if grep -Fq "$CUSTOM_PROMPT_BEGIN" "$prompt_source" || grep -Fq "$CUSTOM_PROMPT_END" "$prompt_source"; then
+        warn "Custom prompt source contains a reserved marker: $prompt_source"
+        return 1
+    fi
+
+    local parent_dir
+    parent_dir=$(dirname "$target")
+    if ! mkdir -p "$parent_dir"; then
+        warn "Cannot create directory for $target"
+        return 1
+    fi
+
+    # Inspect existing target markers without mutating it.
+    # begin_count/end_count of 0/0 is fine (no prior block).
+    # Any other mismatch is malformed and must leave the target unchanged.
+    local mode=""
+    local begin_count=0 end_count=0 begin_line=0 end_line=0
+    if [[ -f "$target" ]]; then
+        mode=$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)
+
+        local marker_info
+        if ! marker_info=$(awk -v begin="$CUSTOM_PROMPT_BEGIN" -v end="$CUSTOM_PROMPT_END" '
+            {
+                line = $0
+                sub(/\r$/, "", line)
+                if (line == begin) {
+                    begin_count++
+                    if (begin_count == 1) begin_line = NR
+                }
+                if (line == end) {
+                    end_count++
+                    if (end_count == 1) end_line = NR
+                }
+            }
+            END {
+                printf "%d %d %d %d\n", begin_count + 0, end_count + 0, begin_line + 0, end_line + 0
+            }
+        ' "$target"); then
+            warn "Cannot inspect custom prompt markers in $target"
+            return 1
+        fi
+        read -r begin_count end_count begin_line end_line <<< "$marker_info"
+
+        if [[ "$begin_count" -ne 0 || "$end_count" -ne 0 ]]; then
+            if [[ "$begin_count" -ne 1 || "$end_count" -ne 1 || "$begin_line" -ge "$end_line" ]]; then
+                warn "Malformed custom prompt markers in $target; leaving file unchanged"
+                return 1
+            fi
+        fi
+    fi
+
+    # Build the full replacement in a temp file; only mv on success.
+    local tmpfile
+    if ! tmpfile=$(mktemp "${target}.tmp.XXXXXX"); then
+        warn "Cannot create temporary file for $target"
+        return 1
+    fi
+
+    # Shellcheck: keep cleanup on every early return below.
+    if [[ -f "$target" ]]; then
+        # Copy user content, omitting any existing valid managed block (+ one
+        # adjacent separator blank). Target stays untouched until final mv.
+        # Strip trailing CR so CRLF CLAUDE.md files match markers reliably.
+        if ! awk -v first="$begin_line" -v last="$end_line" -v has_block=$(( begin_count == 1 ? 1 : 0 )) '
+            {
+                line = $0
+                sub(/\r$/, "", line)
+                lines[NR] = line
+            }
+            END {
+                if (has_block) {
+                    remove_before = (first > 1 && lines[first - 1] == "")
+                    remove_after = (!remove_before && last < NR && lines[last + 1] == "")
+                    for (i = 1; i <= NR; i++) {
+                        if (i >= first && i <= last) continue
+                        if (remove_before && i == first - 1) continue
+                        if (remove_after && i == last + 1) continue
+                        print lines[i]
+                    }
+                } else {
+                    for (i = 1; i <= NR; i++) print lines[i]
+                }
+            }
+        ' "$target" > "$tmpfile"; then
+            rm -f "$tmpfile"
+            warn "Cannot rewrite $target"
+            return 1
+        fi
+    else
+        : > "$tmpfile" || {
+            rm -f "$tmpfile"
+            warn "Cannot create temporary file for $target"
+            return 1
+        }
+    fi
+
+    # Ensure a blank-line separator before the managed block when prior content exists.
+    if [[ -s "$tmpfile" ]]; then
+        local last_byte
+        last_byte=$(LC_ALL=C tail -c 1 "$tmpfile" | od -An -t x1 | tr -d '[:space:]')
+        if [[ "$last_byte" == "0a" ]]; then
+            # Ends with newline; add one more blank line if last line is non-empty.
+            local last_line
+            last_line=$(tail -n 1 "$tmpfile")
+            if [[ -n "$last_line" ]]; then
+                if ! printf '\n' >> "$tmpfile"; then
+                    rm -f "$tmpfile"
+                    warn "Cannot write custom prompt block to $target"
+                    return 1
+                fi
+            fi
+        else
+            if ! printf '\n\n' >> "$tmpfile"; then
+                rm -f "$tmpfile"
+                warn "Cannot write custom prompt block to $target"
+                return 1
+            fi
+        fi
+    fi
+
+    if ! printf '%s\n' "$CUSTOM_PROMPT_BEGIN" >> "$tmpfile"; then
+        rm -f "$tmpfile"
+        warn "Cannot write custom prompt block to $target"
+        return 1
+    fi
+    if ! cat "$prompt_source" >> "$tmpfile"; then
+        rm -f "$tmpfile"
+        warn "Cannot write custom prompt block to $target"
+        return 1
+    fi
+
+    local source_last_byte
+    source_last_byte=$(LC_ALL=C tail -c 1 "$prompt_source" | od -An -t x1 | tr -d '[:space:]')
+    if [[ "$source_last_byte" != "0a" ]]; then
+        if ! printf '\n' >> "$tmpfile"; then
+            rm -f "$tmpfile"
+            warn "Cannot write custom prompt block to $target"
+            return 1
+        fi
+    fi
+    if ! printf '%s\n' "$CUSTOM_PROMPT_END" >> "$tmpfile"; then
+        rm -f "$tmpfile"
+        warn "Cannot write custom prompt block to $target"
+        return 1
+    fi
+
+    if [[ -n "$mode" ]] && ! chmod "$mode" "$tmpfile"; then
+        rm -f "$tmpfile"
+        warn "Cannot preserve permissions for $target"
+        return 1
+    fi
+    if ! mv "$tmpfile" "$target"; then
+        rm -f "$tmpfile"
+        warn "Cannot replace $target"
+        return 1
+    fi
+
+    return 0
+}
+
+remove_custom_prompt_for_current_scope() {
+    local target
+    target=$(get_claude_md_path)
+
+    if remove_custom_prompt_block "$target"; then
+        info "Removed custom prompt from $target"
+    fi
+
+    return 0
+}
+
+# Best-effort download of the runtime prompt when missing.
+# Covers first upgrade from pre-feature versions that only replaced ccs.sh + VERSION.
+ensure_custom_prompt_file() {
+    if [[ -s "$CUSTOM_PROMPT_FILE" ]]; then
+        return 0
+    fi
+
+    mkdir -p "$CUSTOM_PROMPT_DIR"
+    local prompt_tmp
+    prompt_tmp=$(mktemp)
+    if curl -sf --max-time 15 -o "$prompt_tmp" \
+        "${REPO_URL}/custom-model/gpt-custom-prompt.md" \
+        && [[ -s "$prompt_tmp" ]]; then
+        mv "$prompt_tmp" "$CUSTOM_PROMPT_FILE"
+        return 0
+    fi
+    rm -f "$prompt_tmp"
+    return 1
+}
+
+sync_custom_prompt() {
+    local profile="$1"
+
+    if is_custom_prompt_enabled "$profile"; then
+        local target
+        target=$(get_claude_md_path)
+        ensure_custom_prompt_file || true
+        if inject_custom_prompt_block "$target" "$CUSTOM_PROMPT_FILE"; then
+            info "Applied custom prompt to $target"
+        fi
+    else
+        remove_custom_prompt_for_current_scope
+    fi
+
+    return 0
 }
 
 # Validate a single completed section: required-keys + Foundry OR-rule.
@@ -722,6 +1055,9 @@ cmd_switch() {
             ;;
     esac
 
+    # Keep the current scope's CLAUDE.md in sync with this profile (best-effort).
+    sync_custom_prompt "$profile"
+
     # Save active profile
     set_active_profile "$profile"
 
@@ -918,6 +1254,7 @@ cmd_clear() {
     if [[ ! -f "$settings_path" ]]; then
         warn "No project settings file found: $settings_path"
         rm -f "$state_file"
+        remove_custom_prompt_for_current_scope
         success "Removed project state file (nothing else to do)"
         return 0
     fi
@@ -927,6 +1264,7 @@ cmd_clear() {
     if [[ -z "$env_keys" ]]; then
         warn "No provider env keys in project settings"
         rm -f "$state_file"
+        remove_custom_prompt_for_current_scope
         success "Removed project state file (nothing else to do)"
         return 0
     fi
@@ -945,6 +1283,7 @@ cmd_clear() {
     tmpfile=$(mktemp)
     jq 'del(.env)' "$settings_path" > "$tmpfile" && mv "$tmpfile" "$settings_path"
     rm -f "$state_file"
+    remove_custom_prompt_for_current_scope
     success "Cleared project provider config. This project now uses the global profile."
 }
 
@@ -1013,7 +1352,7 @@ cmd_edit_profile() {
     config=$(read_profile "$name")
 
     local type="anthropic"
-    local token url resource api_key haiku opus sonnet
+    local token url resource api_key haiku opus sonnet custom_prompt=""
     while IFS='=' read -r key value; do
         case "$key" in
             PROVIDER_TYPE) type="$value" ;;
@@ -1024,6 +1363,7 @@ cmd_edit_profile() {
             ANTHROPIC_DEFAULT_HAIKU_MODEL) haiku="$value" ;;
             ANTHROPIC_DEFAULT_OPUS_MODEL) opus="$value" ;;
             ANTHROPIC_DEFAULT_SONNET_MODEL) sonnet="$value" ;;
+            CUSTOM_PROMPT) custom_prompt="$value" ;;
         esac
     done <<< "$config"
 
@@ -1071,6 +1411,12 @@ ANTHROPIC_BASE_URL=${n_url}
 ANTHROPIC_DEFAULT_HAIKU_MODEL=${n_haiku}
 ANTHROPIC_DEFAULT_OPUS_MODEL=${n_opus}
 ANTHROPIC_DEFAULT_SONNET_MODEL=${n_sonnet}"
+    fi
+
+    # Preserve optional CUSTOM_PROMPT so interactive edit does not silently disable it.
+    if [[ -n "$custom_prompt" ]]; then
+        new_block="${new_block}
+CUSTOM_PROMPT=${custom_prompt}"
     fi
 
     replace_profile_section "$name" "$new_block"
@@ -1574,6 +1920,20 @@ cmd_update() {
         mv "$tmpfile" "${CCS_DIR}/ccs.sh"
         # Also update the VERSION file
         echo "$latest" > "${CCS_DIR}/VERSION"
+
+        # The repository copy is canonical; overwrite the runtime prompt on update.
+        local prompt_tmp
+        prompt_tmp=$(mktemp)
+        if curl -sf --max-time 30 -o "$prompt_tmp" \
+            "${REPO_URL}/custom-model/gpt-custom-prompt.md" \
+            && [[ -s "$prompt_tmp" ]]; then
+            mkdir -p "$CUSTOM_PROMPT_DIR"
+            mv "$prompt_tmp" "$CUSTOM_PROMPT_FILE"
+        else
+            rm -f "$prompt_tmp"
+            warn "Updated CCS, but could not update the custom prompt file"
+        fi
+
         success "Updated to v${latest}"
         info "Run ccs again to use the new version"
     else
@@ -1680,7 +2040,7 @@ cmd_help() {
     fi
 
     cat << 'EOF'
-CCS - Claude Code Switch v1.0.0
+CCS - Claude Code Switch
 Quick switch between AI provider profiles for Claude Code
 
 USAGE:

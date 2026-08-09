@@ -1,10 +1,19 @@
+# Custom prompt feature (request notes)
 
+Original request: inject a custom prompt into CLAUDE.md for selected profiles when CCS switches, remove it cleanly otherwise, default off.
 
-Đây là 1 custom promt cho các model của gpt: @custom-model/gpt-custom-promt.md
-tôi muốn khi ccs hoạt động:
-- detect model gpt thì sẽ thêm đoạn promt này vào claude.md
-- tùy vào project đang dùng là local hay global để append cho chính xác
-- nhớ remove sạch sẽ khi switch sang model mới ko phải là gpt
-- mặc định sẽ tắt cơ chế promt custom này
-- trừ khi tôi bật nó lên trong config - dĩ nhiên chỉ auto cho gpt model
-    
+Implemented design (approved):
+  docs/superpowers/specs/2026-08-08-custom-prompt-claude-md-design.md
+
+Implementation plan:
+  docs/superpowers/plans/2026-08-08-custom-prompt-claude-md.md
+
+Canonical prompt body (repo source of truth):
+  custom-model/gpt-custom-prompt.md
+
+Runtime opt-in (per profile in ~/.ccs/provider.conf):
+  CUSTOM_PROMPT=1
+
+Notes vs original request:
+- No auto-detect by GPT name/model id; explicit profile key only.
+- Scope follows CCS global vs -p project CLAUDE.md paths.
